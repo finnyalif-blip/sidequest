@@ -112,8 +112,9 @@ const STAGES = [
   { name: "Castle", emoji: "\ud83c\udff0", color: "#C99A2E", from: 16, to: 20 },
 ];
 
-const XP_PER_LEVEL = 100;
-const STORAGE_KEY = "sidequest-state-v4";
+const XP_BASE = 100;
+const XP_GROWTH = 25; // each level costs 25 more xp than the one before it
+const STORAGE_KEY = "sidequest-state-v5";
 
 // ---- Real pixel-art gear, sourced from the Universal LPC Spritesheet Character
 // Generator (open-licensed; see credits below). One 64x64 idle frame per item,
@@ -281,8 +282,18 @@ function isYesterday(dateStr) {
   y.setDate(y.getDate() - 1);
   return d.toDateString() === y.toDateString();
 }
-function levelFromXp(xp) {
-  return Math.floor(xp / XP_PER_LEVEL) + 1;
+function xpNeededForLevel(level) {
+  // xp required to go from `level` to `level + 1` — grows every level
+  return XP_BASE + (level - 1) * XP_GROWTH;
+}
+function levelInfo(totalXp) {
+  let level = 1;
+  let remaining = totalXp;
+  while (remaining >= xpNeededForLevel(level)) {
+    remaining -= xpNeededForLevel(level);
+    level++;
+  }
+  return { level, xpIntoLevel: remaining, xpForNext: xpNeededForLevel(level) };
 }
 function titleForLevel(level) {
   let t = LEVEL_TITLES[0].title;
@@ -342,45 +353,44 @@ export default function Sidequest() {
   const toastTimer = useRef(null);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const data = JSON.parse(raw);
-        setQuests(data.quests || []);
-        setMainQuests(data.mainQuests || []);
-        setCompleted(data.completed || []);
-        setTotalXp(data.totalXp || 0);
-        setStreak(data.streak || 0);
-        setLastCompletionDate(data.lastCompletionDate || null);
-        setDailyBonus(data.dailyBonus || null);
-        setCharacter({ ...DEFAULT_CHARACTER, ...(data.character || {}) });
-        setEquipment({ ...DEFAULT_EQUIPMENT, ...(data.equipment || {}) });
-        setUnlockedGear(data.unlockedGear || []);
-        setPets(data.pets || {});
-        setActivePet(data.activePet || null);
-        if (!data.character) setShowCustomizer(true);
-      } else {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY, false);
+        if (!cancelled && res && res.value) {
+          const data = JSON.parse(res.value);
+          setQuests(data.quests || []);
+          setMainQuests(data.mainQuests || []);
+          setCompleted(data.completed || []);
+          setTotalXp(Number.isFinite(data.totalXp) ? data.totalXp : 0);
+          setStreak(data.streak || 0);
+          setLastCompletionDate(data.lastCompletionDate || null);
+          setDailyBonus(data.dailyBonus || null);
+          setCharacter({ ...DEFAULT_CHARACTER, ...(data.character || {}) });
+          setEquipment({ ...DEFAULT_EQUIPMENT, ...(data.equipment || {}) });
+          setUnlockedGear(data.unlockedGear || []);
+          setPets(data.pets || {});
+          setActivePet(data.activePet || null);
+          if (!data.character) setShowCustomizer(true);
+        } else if (!cancelled) {
+          setShowCustomizer(true);
+        }
+      } catch (e) {
         setShowCustomizer(true);
+      } finally {
+        if (!cancelled) setLoaded(true);
       }
-    } catch (e) {
-      setShowCustomizer(true);
-    } finally {
-      setLoaded(true);
-    }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
-    try {
-      const payload = JSON.stringify({
-        quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
-        character, equipment, unlockedGear, pets, activePet,
-      });
-      localStorage.setItem(STORAGE_KEY, payload);
-      setSaveError(false);
-    } catch (e) {
-      setSaveError(true);
-    }
+    const payload = JSON.stringify({
+      quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
+      character, equipment, unlockedGear, pets, activePet,
+    });
+    window.storage.set(STORAGE_KEY, payload, false).then((r) => setSaveError(!r)).catch(() => setSaveError(true));
   }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded]);
 
   useEffect(() => {
@@ -399,7 +409,7 @@ export default function Sidequest() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
-  const level = levelFromXp(totalXp);
+  const { level, xpIntoLevel, xpForNext } = levelInfo(totalXp);
 
   // Auto-unlock gear and pet companions as the player levels up.
   useEffect(() => {
@@ -417,9 +427,12 @@ export default function Sidequest() {
     }
     if (prevLevelRef.current !== null) {
       const msgs = [];
+      const prevLap = Math.floor((prevLevelRef.current - 1) / BOARD_LENGTH) + 1;
+      const newLap = Math.floor((level - 1) / BOARD_LENGTH) + 1;
+      if (newLap > prevLap) msgs.push("Lap complete! The board loops back \u2014 onward.");
       if (freshGear.length > 0) msgs.push(`Unlocked ${freshGear.length} new item${freshGear.length === 1 ? "" : "s"}`);
       if (freshPets.length > 0) msgs.push(`New companion: ${freshPets.map((p) => `${p.emoji || "\u2728"} ${p.name}`).join(", ")}`);
-      if (msgs.length > 0) showToast(msgs.join(" \u00b7 "));
+      if (msgs.length > 0) showToast(msgs.join(" · "));
     }
     prevLevelRef.current = level;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -445,9 +458,8 @@ export default function Sidequest() {
   }
 
   function registerCompletion(entry, defaultMessage) {
-    const newTotal = completed.length + 1;
     setCompleted((prev) => [entry, ...prev].slice(0, 300));
-    setTotalXp((prev) => prev + entry.xp);
+    setTotalXp((prev) => prev + (Number.isFinite(entry.xp) ? entry.xp : 0));
     const today = todayStr();
     setStreak((prevStreak) => {
       if (lastCompletionDate === today) return prevStreak;
@@ -459,7 +471,7 @@ export default function Sidequest() {
     let petMsg = null;
     if (activePet) {
       setPets((prev) => {
-        const newXp = (prev[activePet] || 0) + entry.xp;
+        const newXp = (prev[activePet] || 0) + (Number.isFinite(entry.xp) ? entry.xp : 0);
         const prevLevel = prevPetLevelRef.current[activePet] || petLevelFromXp(prev[activePet] || 0);
         const newLevel = petLevelFromXp(newXp);
         if (newLevel > prevLevel) {
@@ -471,9 +483,7 @@ export default function Sidequest() {
       });
     }
 
-    if (newTotal % BOARD_LENGTH === 0) {
-      showToast("Lap complete! The board loops back \u2014 onward.");
-    } else if (petMsg) {
+    if (petMsg) {
       showToast(petMsg);
     } else {
       showToast(defaultMessage);
@@ -516,7 +526,8 @@ export default function Sidequest() {
   }
   function completeDailyBonus() {
     if (!dailyBonus || dailyBonus.completed) return;
-    const entry = { id: uid(), title: dailyBonus.idea.title, category: dailyBonus.idea.category, xp: dailyBonus.idea.xp * 2, completedAt: Date.now(), type: "bonus" };
+    const bonusXp = (DIFFICULTIES.find((d) => d.id === dailyBonus.idea.difficulty)?.xp || 0) * 2;
+    const entry = { id: uid(), title: dailyBonus.idea.title, category: dailyBonus.idea.category, xp: bonusXp, completedAt: Date.now(), type: "bonus" };
     registerCompletion(entry, "Bonus quest claimed \u2014 double XP banked.");
     setDailyBonus((prev) => ({ ...prev, completed: true }));
   }
@@ -573,13 +584,11 @@ export default function Sidequest() {
     });
   }
 
-  const xpIntoLevel = totalXp % XP_PER_LEVEL;
   const todaysCompleted = completed.filter((c) => new Date(c.completedAt).toDateString() === new Date().toDateString());
   const typeLabel = { main: "Main", bonus: "Bonus" };
 
-  const totalCompleted = completed.length;
-  const boardPos = (totalCompleted % BOARD_LENGTH) + 1;
-  const lap = Math.floor(totalCompleted / BOARD_LENGTH) + 1;
+  const boardPos = ((level - 1) % BOARD_LENGTH) + 1;
+  const lap = Math.floor((level - 1) / BOARD_LENGTH) + 1;
   const boardRow = Math.floor((boardPos - 1) / BOARD_COLS);
   const boardCol = (boardPos - 1) % BOARD_COLS;
 
@@ -686,6 +695,7 @@ export default function Sidequest() {
         .sq-map-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
         .sq-map-title { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; }
         .sq-map-lap { font-size: 12.5px; color: var(--ink-soft); }
+        .sq-map-sub { font-size: 12px; color: var(--ink-soft); font-style: italic; margin: 0 0 12px; }
         .sq-board-grid-wrap { display: flex; justify-content: center; padding: 10px 0; }
         .sq-board-grid { position: relative; }
         .sq-board-tiles { display: grid; grid-template-columns: repeat(5, 54px); gap: 8px; }
@@ -799,8 +809,9 @@ export default function Sidequest() {
           <div>
             <div className="sq-map-head">
               <span className="sq-map-title">{stageForSpace(boardPos).emoji} {stageForSpace(boardPos).name}</span>
-              <span className="sq-map-lap">Lap {lap} \u00b7 space {boardPos}/{BOARD_LENGTH}</span>
+              <span className="sq-map-lap">Lv.{level} · Lap {lap} · space {boardPos}/{BOARD_LENGTH}</span>
             </div>
+            <p className="sq-map-sub">You move forward one space every time you level up — not with every quest.</p>
             <div className="sq-board-grid-wrap">
               <div className="sq-board-grid" style={{ width: BOARD_COLS * TILE + (BOARD_COLS - 1) * GAP, height: Math.ceil(BOARD_LENGTH / BOARD_COLS) * TILE + (Math.ceil(BOARD_LENGTH / BOARD_COLS) - 1) * GAP }}>
                 <div className="sq-board-tiles">
@@ -832,7 +843,7 @@ export default function Sidequest() {
                 <div><span className="sq-level-num">Lv.{level}</span> <span className="sq-level-name">{titleForLevel(level)}</span></div>
                 {streak > 0 && (<div className="sq-streak"><Flame size={15} strokeWidth={2.5} />{streak}-day streak</div>)}
               </div>
-              <div className="sq-xp-label">{xpIntoLevel} / {XP_PER_LEVEL} xp to level {level + 1} \u00b7 {totalXp} xp total</div>
+              <div className="sq-xp-label">{xpIntoLevel} / {xpForNext} xp to level {level + 1} · {totalXp} xp total</div>
 
               <div className="sq-character-row">
                 <Avatar scale={3} />
@@ -897,7 +908,7 @@ export default function Sidequest() {
                         })}
                       </div>
                       <div className="sq-gear-hint">
-                        {GEAR_MANIFEST.filter((g) => g.category === gearTab && (g.fits === "both" || g.fits === character.bodyType)).length} option{GEAR_MANIFEST.filter((g) => g.category === gearTab && (g.fits === "both" || g.fits === character.bodyType)).length === 1 ? "" : "s"} in {GEAR_TABS.find((t) => t.id === gearTab)?.label} \u2014 scroll for more, locked ones show the level that unlocks them
+                        {GEAR_MANIFEST.filter((g) => g.category === gearTab && (g.fits === "both" || g.fits === character.bodyType)).length} option{GEAR_MANIFEST.filter((g) => g.category === gearTab && (g.fits === "both" || g.fits === character.bodyType)).length === 1 ? "" : "s"} in {GEAR_TABS.find((t) => t.id === gearTab)?.label} — scroll for more, locked ones show the level that unlocks them
                       </div>
                     </div>
                   )}
@@ -925,7 +936,7 @@ export default function Sidequest() {
                     <div className="sq-pet-card-name">{unlocked ? p.name : "???"}</div>
                     {unlocked ? (
                       <>
-                        <div className="sq-pet-card-meta">Lv.{lvl} \u00b7 {stage.label}</div>
+                        <div className="sq-pet-card-meta">Lv.{lvl} · {stage.label}</div>
                         <div className="sq-pet-bar"><div className="sq-pet-bar-fill" style={{ width: `${pct}%` }} /></div>
                         <button type="button" className="sq-pet-set-btn" disabled={isActive} onClick={() => setActivePet(p.id)}>{isActive ? "Active" : "Set active"}</button>
                       </>
@@ -943,7 +954,7 @@ export default function Sidequest() {
                 <div className="sq-bonus-row">
                   <div>
                     <div className="sq-bonus-title">{dailyBonus.idea.title}</div>
-                    <div className="sq-bonus-meta">{CATEGORIES.find((c) => c.id === dailyBonus.idea.category)?.label} \u00b7 {dailyBonus.idea.xp * 2}xp (double today only)</div>
+                    <div className="sq-bonus-meta">{CATEGORIES.find((c) => c.id === dailyBonus.idea.category)?.label} · {(DIFFICULTIES.find((d) => d.id === dailyBonus.idea.difficulty)?.xp || 0) * 2}xp (double today only)</div>
                   </div>
                   <button className="sq-bonus-btn" onClick={completeDailyBonus} disabled={dailyBonus.completed}>{dailyBonus.completed ? <><Check size={14} />Claimed</> : "Mark complete"}</button>
                 </div>
@@ -960,7 +971,7 @@ export default function Sidequest() {
                     <div className="sq-main-body">
                       <div className="sq-quest-main">
                         <div className="sq-main-title">{q.title}</div>
-                        <div className="sq-main-meta"><Crown size={12} />{tier?.label} \u00b7 {q.xp}xp</div>
+                        <div className="sq-main-meta"><Crown size={12} />{tier?.label} · {q.xp}xp</div>
                       </div>
                       <div className="sq-quest-actions">
                         <button className="sq-main-icon-btn complete" onClick={() => completeMainQuest(q.id)} aria-label={`Complete ${q.title}`}><Check size={16} strokeWidth={2.5} /></button>
@@ -977,7 +988,7 @@ export default function Sidequest() {
                 <button className="sq-add-btn" type="submit"><Plus size={16} strokeWidth={2.5} />Add</button>
               </div>
               <div className="sq-picker-row">
-                <div className="sq-picker-group">{MAIN_TIERS.map((t) => (<button type="button" key={t.id} className={`sq-chip ${mainTier === t.id ? "active" : ""}`} onClick={() => setMainTier(t.id)}>{t.label} \u00b7 {t.xp}xp</button>))}</div>
+                <div className="sq-picker-group">{MAIN_TIERS.map((t) => (<button type="button" key={t.id} className={`sq-chip ${mainTier === t.id ? "active" : ""}`} onClick={() => setMainTier(t.id)}>{t.label} · {t.xp}xp</button>))}</div>
               </div>
             </form>
 
@@ -991,7 +1002,7 @@ export default function Sidequest() {
                 <div className="sq-picker-group">{CATEGORIES.map((c) => (<button type="button" key={c.id} className={`sq-chip ${category === c.id ? "active" : ""}`} onClick={() => setCategory(c.id)} style={{ color: c.color }}><c.Icon size={16} />{c.label}</button>))}</div>
               </div>
               <div className="sq-picker-row">
-                <div className="sq-picker-group">{DIFFICULTIES.map((d) => (<button type="button" key={d.id} className={`sq-chip ${difficulty === d.id ? "active" : ""}`} onClick={() => setDifficulty(d.id)}>{d.label} \u00b7 {d.xp}xp</button>))}</div>
+                <div className="sq-picker-group">{DIFFICULTIES.map((d) => (<button type="button" key={d.id} className={`sq-chip ${difficulty === d.id ? "active" : ""}`} onClick={() => setDifficulty(d.id)}>{d.label} · {d.xp}xp</button>))}</div>
               </div>
             </form>
 
@@ -1017,7 +1028,7 @@ export default function Sidequest() {
                     <div className="sq-idea-row" key={i.title} onClick={() => toggleIdeaSelect(i.title)}>
                       <div className={`sq-idea-check ${checked ? "checked" : ""}`}>{checked && <Check size={12} color="#fff" strokeWidth={3} />}</div>
                       <div className="sq-idea-title">{i.title}</div>
-                      <div className="sq-idea-meta"><span style={{ color: cat?.color, fontWeight: 600 }}>{cat?.label}</span> \u00b7 {diff?.xp}xp</div>
+                      <div className="sq-idea-meta"><span style={{ color: cat?.color, fontWeight: 600 }}>{cat?.label}</span> · {diff?.xp}xp</div>
                     </div>
                   );
                 })}
@@ -1039,7 +1050,7 @@ export default function Sidequest() {
                     <div className="sq-quest-body">
                       <div className="sq-quest-main">
                         <div className="sq-quest-title">{q.title}</div>
-                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} \u00b7 {diff.label} \u00b7 {q.xp}xp</div>
+                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} · {diff.label} · {q.xp}xp</div>
                       </div>
                       <div className="sq-quest-actions">
                         <button className="sq-icon-btn complete" onClick={() => completeQuest(q.id)} aria-label={`Complete ${q.title}`}><Check size={16} strokeWidth={2.5} /></button>
@@ -1067,7 +1078,7 @@ export default function Sidequest() {
       </div>
 
       {toast && (<div className="sq-toast"><Sparkles size={14} />{toast}</div>)}
-      {saveError && (<div className="sq-toast" style={{ bottom: 68, background: "#A6441F" }}>Couldn't save \u2014 your progress may not persist.</div>)}
+      {saveError && (<div className="sq-toast" style={{ bottom: 68, background: "#A6441F" }}>Couldn't save — your progress may not persist.</div>)}
     </div>
   );
 }
