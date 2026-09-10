@@ -114,7 +114,7 @@ const STAGES = [
 
 const XP_BASE = 100;
 const XP_GROWTH = 25; // each level costs 25 more xp than the one before it
-const STORAGE_KEY = "sidequest-state-v5";
+const STORAGE_KEY = "sidequest-state-v6";
 
 // ---- Real pixel-art gear, sourced from the Universal LPC Spritesheet Character
 // Generator (open-licensed; see credits below). One 64x64 idle frame per item,
@@ -550,6 +550,27 @@ export default function Sidequest() {
     setSelectedIdeas(new Set());
     showToast(newQuests.length === 1 ? "Quest added to the board." : `${newQuests.length} quests added to the board.`);
   }
+  function resetProgress() {
+    setQuests([]);
+    setMainQuests([]);
+    setCompleted([]);
+    setTotalXp(0);
+    setStreak(0);
+    setLastCompletionDate(null);
+    setDailyBonus(null);
+    setCharacter(DEFAULT_CHARACTER);
+    setEquipment(DEFAULT_EQUIPMENT);
+    setUnlockedGear([]);
+    setPets({});
+    setActivePet(null);
+    setIdeaPool([]);
+    setSelectedIdeas(new Set());
+    setShowCustomizer(true);
+    prevLevelRef.current = null;
+    prevPetLevelRef.current = {};
+    showToast("Progress reset \u2014 starting fresh.");
+  }
+
   function rollForQuest() {
     const activeTitles = new Set([...quests, ...mainQuests].map((q) => q.title));
     const available = QUEST_IDEAS.filter((i) => !activeTitles.has(i.title));
@@ -782,6 +803,10 @@ export default function Sidequest() {
         .sq-log-xp { color: var(--trail); font-weight: 500; }
 
         .sq-toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 10px 18px; font-size: 13.5px; font-weight: 500; display: flex; align-items: center; gap: 7px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); max-width: 90%; text-align: center; }
+        .sq-reset-row { text-align: center; margin-top: 30px; padding-top: 14px; border-top: 1px dashed var(--line); }
+        .sq-reset-btn { background: none; border: none; color: var(--ink-soft); font-size: 11.5px; text-decoration: underline; cursor: pointer; padding: 4px; }
+        .sq-reset-btn:hover { color: var(--rust); }
+        .sq-reset-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
 
         @media (max-width: 420px) { .sq-title { font-size: 27px; } .sq-form-row { flex-direction: column; } .sq-add-btn { justify-content: center; } .sq-character-row { flex-direction: column; align-items: center; } }
       `}</style>
@@ -1076,6 +1101,12 @@ export default function Sidequest() {
             )}
           </>
         )}
+
+        <div className="sq-reset-row">
+          <button type="button" className="sq-reset-btn" onClick={() => { if (window.confirm("Reset all progress? Your level, gear, pets, and quests will all be wiped. This can't be undone.")) resetProgress(); }}>
+            Reset progress
+          </button>
+        </div>
       </div>
 
       {toast && (<div className="sq-toast"><Sparkles size={14} />{toast}</div>)}
