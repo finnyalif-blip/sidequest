@@ -353,44 +353,45 @@ export default function Sidequest() {
   const toastTimer = useRef(null);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await window.storage.get(STORAGE_KEY, false);
-        if (!cancelled && res && res.value) {
-          const data = JSON.parse(res.value);
-          setQuests(data.quests || []);
-          setMainQuests(data.mainQuests || []);
-          setCompleted(data.completed || []);
-          setTotalXp(Number.isFinite(data.totalXp) ? data.totalXp : 0);
-          setStreak(data.streak || 0);
-          setLastCompletionDate(data.lastCompletionDate || null);
-          setDailyBonus(data.dailyBonus || null);
-          setCharacter({ ...DEFAULT_CHARACTER, ...(data.character || {}) });
-          setEquipment({ ...DEFAULT_EQUIPMENT, ...(data.equipment || {}) });
-          setUnlockedGear(data.unlockedGear || []);
-          setPets(data.pets || {});
-          setActivePet(data.activePet || null);
-          if (!data.character) setShowCustomizer(true);
-        } else if (!cancelled) {
-          setShowCustomizer(true);
-        }
-      } catch (e) {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const data = JSON.parse(raw);
+        setQuests(data.quests || []);
+        setMainQuests(data.mainQuests || []);
+        setCompleted(data.completed || []);
+        setTotalXp(Number.isFinite(data.totalXp) ? data.totalXp : 0);
+        setStreak(data.streak || 0);
+        setLastCompletionDate(data.lastCompletionDate || null);
+        setDailyBonus(data.dailyBonus || null);
+        setCharacter({ ...DEFAULT_CHARACTER, ...(data.character || {}) });
+        setEquipment({ ...DEFAULT_EQUIPMENT, ...(data.equipment || {}) });
+        setUnlockedGear(data.unlockedGear || []);
+        setPets(data.pets || {});
+        setActivePet(data.activePet || null);
+        if (!data.character) setShowCustomizer(true);
+      } else {
         setShowCustomizer(true);
-      } finally {
-        if (!cancelled) setLoaded(true);
       }
-    })();
-    return () => { cancelled = true; };
+    } catch (e) {
+      setShowCustomizer(true);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
-    const payload = JSON.stringify({
-      quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
-      character, equipment, unlockedGear, pets, activePet,
-    });
-    window.storage.set(STORAGE_KEY, payload, false).then((r) => setSaveError(!r)).catch(() => setSaveError(true));
+    try {
+      const payload = JSON.stringify({
+        quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
+        character, equipment, unlockedGear, pets, activePet,
+      });
+      localStorage.setItem(STORAGE_KEY, payload);
+      setSaveError(false);
+    } catch (e) {
+      setSaveError(true);
+    }
   }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded]);
 
   useEffect(() => {
