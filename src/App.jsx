@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase } from "./supabaseClient.js";
 import {
   Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles,
   Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords,
@@ -352,47 +353,116 @@ export default function Sidequest() {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
 
+  const [authUser, setAuthUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [showAccountPanel, setShowAccountPanel] = useState(false);
+  const [accountMode, setAccountMode] = useState("link"); // "link" | "login"
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountStatus, setAccountStatus] = useState(null); // { type: "sent"|"error", message }
+  const saveTimer = useRef(null);
+
+  // Sign in (anonymously, silently) and load this user's cloud save.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const data = JSON.parse(raw);
-        setQuests(data.quests || []);
-        setMainQuests(data.mainQuests || []);
-        setCompleted(data.completed || []);
-        setTotalXp(Number.isFinite(data.totalXp) ? data.totalXp : 0);
-        setStreak(data.streak || 0);
-        setLastCompletionDate(data.lastCompletionDate || null);
-        setDailyBonus(data.dailyBonus || null);
-        setCharacter({ ...DEFAULT_CHARACTER, ...(data.character || {}) });
-        setEquipment({ ...DEFAULT_EQUIPMENT, ...(data.equipment || {}) });
-        setUnlockedGear(data.unlockedGear || []);
-        setPets(data.pets || {});
-        setActivePet(data.activePet || null);
-        if (!data.character) setShowCustomizer(true);
+    let cancelled = false;
+
+    async function init() {
+      const { data: { session } } = await supabase.auth.getSession();
+      let user = session?.user || null;
+
+      if (!user) {
+        const { data, error } = await supabase.auth.signInAnonymously();
+        if (error) {
+          if (cancelled) return;
+          setShowCustomizer(true);
+          setAuthReady(true);
+          return;
+        }
+        user = data.user;
+      }
+      if (cancelled) return;
+      setAuthUser(user);
+
+      const { data: row } = await supabase.from("game_saves").select("data").eq("user_id", user.id).maybeSingle();
+      if (cancelled) return;
+
+      if (row && row.data) {
+        const gameData = row.data;
+        setQuests(gameData.quests || []);
+        setMainQuests(gameData.mainQuests || []);
+        setCompleted(gameData.completed || []);
+        setTotalXp(Number.isFinite(gameData.totalXp) ? gameData.totalXp : 0);
+        setStreak(gameData.streak || 0);
+        setLastCompletionDate(gameData.lastCompletionDate || null);
+        setDailyBonus(gameData.dailyBonus || null);
+        setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
+        setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
+        setUnlockedGear(gameData.unlockedGear || []);
+        setPets(gameData.pets || {});
+        setActivePet(gameData.activePet || null);
+        if (!gameData.character) setShowCustomizer(true);
       } else {
         setShowCustomizer(true);
       }
-    } catch (e) {
-      setShowCustomizer(true);
-    } finally {
+      setAuthReady(true);
       setLoaded(true);
     }
+
+    init();
+
+    // If the user clicks a magic link (new device, or confirming a linked email),
+    // Supabase swaps the session out from under us — reload this device's view of the save.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session?.user && session.user.id !== authUser?.id) {
+        window.location.reload();
+      }
+    });
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Save to the cloud (debounced) whenever the game state actually changes.
   useEffect(() => {
-    if (!loaded) return;
-    try {
-      const payload = JSON.stringify({
+    if (!loaded || !authUser) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      const payload = {
         quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
         character, equipment, unlockedGear, pets, activePet,
+      };
+      const { error } = await supabase.from("game_saves").upsert({
+        user_id: authUser.id, data: payload, updated_at: new Date().toISOString(),
       });
-      localStorage.setItem(STORAGE_KEY, payload);
-      setSaveError(false);
-    } catch (e) {
-      setSaveError(true);
+      setSaveError(!!error);
+    }, 600);
+    return () => clearTimeout(saveTimer.current);
+  }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded, authUser]);
+
+  async function sendAccountEmail() {
+    const trimmed = accountEmail.trim();
+    if (!trimmed) return;
+    setAccountStatus(null);
+    const { error } = accountMode === "link"
+      ? await supabase.auth.updateUser({ email: trimmed })
+      : await supabase.auth.signInWithOtp({ email: trimmed });
+    if (error) {
+      setAccountStatus({ type: "error", message: error.message });
+    } else {
+      setAccountStatus({
+        type: "sent",
+        message: accountMode === "link"
+          ? "Check your email and click the link to finish saving your account."
+          : "Check your email and click the link to sign in on this device.",
+      });
     }
-  }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded]);
+  }
+
+  async function signOutAccount() {
+    await supabase.auth.signOut();
+    window.location.reload();
+  }
 
   useEffect(() => {
     if (!loaded) return;
@@ -661,6 +731,20 @@ export default function Sidequest() {
         .sq-die-btn:hover { background: var(--rust); color: #fff; border-color: var(--rust); }
         .sq-die-btn:active { transform: rotate(12deg); }
         .sq-die-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+        .sq-header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .sq-account-btn { font-size: 11px; font-weight: 600; padding: 6px 10px; background: var(--paper); color: var(--ink-soft); border: 1.5px solid var(--line); cursor: pointer; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+        .sq-account-btn:hover { border-color: var(--ink); color: var(--ink); }
+        .sq-account-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+        .sq-account-panel { border: 1.5px solid var(--ink); background: var(--paper-deep); padding: 14px; margin-bottom: 18px; }
+        .sq-account-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+        .sq-account-tab { font-size: 12px; font-weight: 600; padding: 6px 10px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
+        .sq-account-tab.active { border-color: var(--ink); background: #fff; color: var(--ink); }
+        .sq-account-text { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 10px; line-height: 1.5; }
+        .sq-account-form { display: flex; gap: 8px; }
+        .sq-account-status { font-size: 12px; margin: 8px 0 0; }
+        .sq-account-status.sent { color: var(--trail); }
+        .sq-account-status.error { color: var(--rust); }
+        .sq-account-signout { font-size: 12px; font-weight: 600; padding: 6px 12px; background: none; border: 1.5px solid var(--rust); color: var(--rust); cursor: pointer; }
 
         .sq-nav { display: flex; gap: 0; margin-bottom: 20px; border: 1.5px solid var(--ink); }
         .sq-nav-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; font-weight: 700; font-size: 13.5px; background: var(--paper); color: var(--ink-soft); border: none; cursor: pointer; border-right: 1.5px solid var(--ink); }
@@ -817,10 +901,52 @@ export default function Sidequest() {
             <h1 className="sq-title">Sidequest</h1>
             <p className="sq-tagline">Turn today's to-dos into today's adventure.</p>
           </div>
-          <button type="button" className="sq-die-btn" onClick={rollForQuest} aria-label="Roll the die for a random quest">
-            <Dice5 size={26} strokeWidth={1.75} />
-          </button>
+          <div className="sq-header-actions">
+            <button
+              type="button"
+              className="sq-account-btn"
+              onClick={() => { setShowAccountPanel((v) => !v); setAccountStatus(null); }}
+            >
+              {authUser?.email ? `\u2713 ${authUser.email}` : "Save progress"}
+            </button>
+            <button type="button" className="sq-die-btn" onClick={rollForQuest} aria-label="Roll the die for a random quest">
+              <Dice5 size={26} strokeWidth={1.75} />
+            </button>
+          </div>
         </div>
+
+        {showAccountPanel && (
+          <div className="sq-account-panel">
+            {authUser?.email ? (
+              <>
+                <p className="sq-account-text">Signed in as <strong>{authUser.email}</strong>. Your progress syncs to this account on any device.</p>
+                <button type="button" className="sq-account-signout" onClick={signOutAccount}>Sign out</button>
+              </>
+            ) : (
+              <>
+                <div className="sq-account-tabs">
+                  <button type="button" className={`sq-account-tab ${accountMode === "link" ? "active" : ""}`} onClick={() => { setAccountMode("link"); setAccountStatus(null); }}>Create account</button>
+                  <button type="button" className={`sq-account-tab ${accountMode === "login" ? "active" : ""}`} onClick={() => { setAccountMode("login"); setAccountStatus(null); }}>Already have one?</button>
+                </div>
+                <p className="sq-account-text">
+                  {accountMode === "link"
+                    ? "Your progress is already saving automatically on this device. Add an email if you'd like to pick it up on another device too \u2014 nothing else changes."
+                    : "Signing in will replace what's on this device with whatever's saved to that account."}
+                </p>
+                <div className="sq-account-form">
+                  <input
+                    type="email" className="sq-input" placeholder="you@example.com"
+                    value={accountEmail} onChange={(e) => setAccountEmail(e.target.value)}
+                  />
+                  <button type="button" className="sq-add-btn" onClick={sendAccountEmail}>Send link</button>
+                </div>
+                {accountStatus && (
+                  <p className={`sq-account-status ${accountStatus.type}`}>{accountStatus.message}</p>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         <div className="sq-nav">
           <button type="button" className={`sq-nav-btn ${view === "home" ? "active" : ""}`} onClick={() => setView("home")}>
