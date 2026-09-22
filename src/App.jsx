@@ -372,6 +372,7 @@ export default function Sidequest() {
 
   const [authUser, setAuthUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+  const [authInitError, setAuthInitError] = useState(null);
   const [showAccountPanel, setShowAccountPanel] = useState(false);
   const [accountMode, setAccountMode] = useState("link"); // "link" | "login"
   const [accountEmail, setAccountEmail] = useState("");
@@ -383,45 +384,56 @@ export default function Sidequest() {
     let cancelled = false;
 
     async function init() {
-      const { data: { session } } = await supabase.auth.getSession();
-      let user = session?.user || null;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        let user = session?.user || null;
 
-      if (!user) {
-        const { data, error } = await supabase.auth.signInAnonymously();
-        if (error) {
-          if (cancelled) return;
-          setShowCustomizer(true);
-          setAuthReady(true);
-          return;
+        if (!user) {
+          const { data, error } = await supabase.auth.signInAnonymously();
+          if (error) throw error;
+          user = data.user;
         }
-        user = data.user;
-      }
-      if (cancelled) return;
-      setAuthUser(user);
+        if (cancelled) return;
+        setAuthUser(user);
 
-      const { data: row } = await supabase.from("game_saves").select("data").eq("user_id", user.id).maybeSingle();
-      if (cancelled) return;
+        const { data: row, error: rowError } = await supabase.from("game_saves").select("data").eq("user_id", user.id).maybeSingle();
+        if (rowError) throw rowError;
+        if (cancelled) return;
 
-      if (row && row.data) {
-        const gameData = row.data;
-        setQuests(gameData.quests || []);
-        setMainQuests(gameData.mainQuests || []);
-        setCompleted(gameData.completed || []);
-        setTotalXp(Number.isFinite(gameData.totalXp) ? gameData.totalXp : 0);
-        setStreak(gameData.streak || 0);
-        setLastCompletionDate(gameData.lastCompletionDate || null);
-        setDailyBonus(gameData.dailyBonus || null);
-        setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
-        setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
-        setUnlockedGear(gameData.unlockedGear || []);
-        setPets(gameData.pets || {});
-        setActivePet(gameData.activePet || null);
-        if (!gameData.character) setShowCustomizer(true);
-      } else {
+        if (row && row.data) {
+          const gameData = row.data;
+          setQuests(gameData.quests || []);
+          setMainQuests(gameData.mainQuests || []);
+          setCompleted(gameData.completed || []);
+          setTotalXp(Number.isFinite(gameData.totalXp) ? gameData.totalXp : 0);
+          setStreak(gameData.streak || 0);
+          setLastCompletionDate(gameData.lastCompletionDate || null);
+          setDailyBonus(gameData.dailyBonus || null);
+          setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
+          setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
+          setUnlockedGear(gameData.unlockedGear || []);
+          setPets(gameData.pets || {});
+          setActivePet(gameData.activePet || null);
+          if (!gameData.character) setShowCustomizer(true);
+        } else {
+          setShowCustomizer(true);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error("Sidequest: startup sign-in/load failed —", err);
+        setAuthInitError(
+          err?.message === "Auth session missing!"
+            ? "Couldn't start a save session. If you're the developer: check that Anonymous Sign-Ins are enabled in your Supabase project's Authentication \u2192 Providers settings."
+            : "Couldn't connect to your saved progress. You can keep playing, but nothing will be saved until you refresh with a working connection."
+        );
         setShowCustomizer(true);
+      } finally {
+        if (!cancelled) {
+          setAuthReady(true);
+          setLoaded(true);
+        }
       }
-      setAuthReady(true);
-      setLoaded(true);
     }
 
     init();
@@ -461,6 +473,10 @@ export default function Sidequest() {
     const trimmed = accountEmail.trim();
     if (!trimmed) return;
     setAccountStatus(null);
+    if (accountMode === "link" && !authUser) {
+      setAccountStatus({ type: "error", message: "Can't link an email right now — there's no active save session. Try refreshing the page first." });
+      return;
+    }
     const { error } = accountMode === "link"
       ? await supabase.auth.updateUser({ email: trimmed })
       : await supabase.auth.signInWithOtp({ email: trimmed });
@@ -925,7 +941,7 @@ export default function Sidequest() {
               className="sq-account-btn"
               onClick={() => { setShowAccountPanel((v) => !v); setAccountStatus(null); }}
             >
-              {authUser?.email ? `\u2713 ${authUser.email}` : "Save progress"}
+              {authUser?.email ? `\u2713 ${authUser.email}` : authInitError ? "\u26a0 Can't save" : "Save progress"}
             </button>
             <button type="button" className="sq-die-btn" onClick={rollForQuest} aria-label="Roll the die for a random quest">
               <Dice5 size={26} strokeWidth={1.75} />
@@ -935,7 +951,12 @@ export default function Sidequest() {
 
         {showAccountPanel && (
           <div className="sq-account-panel">
-            {authUser?.email ? (
+            {authInitError ? (
+              <>
+                <p className="sq-account-text">{authInitError}</p>
+                <button type="button" className="sq-account-signout" onClick={() => window.location.reload()}>Retry</button>
+              </>
+            ) : authUser?.email ? (
               <>
                 <p className="sq-account-text">Signed in as <strong>{authUser.email}</strong>. Your progress syncs to this account on any device.</p>
                 <button type="button" className="sq-account-signout" onClick={signOutAccount}>Sign out</button>
