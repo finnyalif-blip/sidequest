@@ -4,7 +4,7 @@ import {
   reminderSupport, currentReminderState, enableReminders, disableReminders, updateNudge, syncTimezone, sendTestNotification,
 } from "./notifications.js";
 import {
-  Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles, Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords, Bell, Download, Shield,
+  Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles, Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords, Bell, Download, Shield, Gift, Share2,
 } from "lucide-react";
 
 const CATEGORIES = [
@@ -389,6 +389,144 @@ function newerSave(a, b) {
   return (b.savedAt || 0) > (a.savedAt || 0) ? b : a;
 }
 
+// ---- Sharing & friend quests ----
+const FRIEND_BONUS = 0.5;        // quests from a friend pay 50% extra xp
+const SEND_REWARD_XP = 10;       // xp for sending a friend a quest
+const SEND_REWARD_PER_DAY = 3;   // how many sends a day earn that xp
+const PLAYER_NAME_KEY = "sidequest:playerName";
+
+function readPlayerName() {
+  try { return (window.localStorage.getItem(PLAYER_NAME_KEY) || "").slice(0, 24); } catch (e) { return ""; }
+}
+function writePlayerName(name) {
+  try { window.localStorage.setItem(PLAYER_NAME_KEY, name); } catch (e) { /* ignore */ }
+}
+function appUrl() {
+  return window.location.origin;
+}
+function friendXp(difficulty) {
+  const diff = DIFFICULTIES.find((d) => d.id === difficulty);
+  return Math.round((diff ? diff.xp : 0) * (1 + FRIEND_BONUS));
+}
+
+// A quest gift travels inside the link itself: ?gift=1&t=title&c=category&d=difficulty&from=name
+function buildGiftLink(quest, from) {
+  const params = new URLSearchParams({
+    gift: "1", t: quest.title.slice(0, 140), c: quest.category, d: quest.difficulty, from: from.slice(0, 24),
+  });
+  return `${appUrl()}/?${params.toString()}`;
+}
+function readGiftFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("gift") !== "1") return null;
+    // Clear it from the address bar so a refresh doesn't offer the same quest again.
+    window.history.replaceState(null, "", window.location.pathname);
+    const title = (params.get("t") || "").trim().slice(0, 140);
+    const category = params.get("c");
+    const difficulty = params.get("d");
+    const from = (params.get("from") || "").trim().slice(0, 24) || "A friend";
+    if (!title || !CATEGORIES.some((c) => c.id === category) || !DIFFICULTIES.some((d) => d.id === difficulty)) return null;
+    return { title, category, difficulty, from };
+  } catch (e) {
+    return null;
+  }
+}
+// Read once when the page loads (outside React, so StrictMode's double render can't lose it).
+const INITIAL_GIFT = typeof window !== "undefined" ? readGiftFromUrl() : null;
+
+// Opens the phone's share sheet when there is one; otherwise copies to the clipboard.
+async function shareContent({ text, url, file }) {
+  try {
+    if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: "Sidequest", text: `${text} ${url}` });
+      return "shared";
+    }
+    if (navigator.share) {
+      await navigator.share({ title: "Sidequest", text, url });
+      return "shared";
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") return "cancelled";
+  }
+  try {
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    return "copied";
+  } catch (e) {
+    return "failed";
+  }
+}
+
+let atlasImagePromise = null;
+function loadAtlas() {
+  if (!atlasImagePromise) {
+    atlasImagePromise = new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = GEAR_ATLAS;
+    });
+  }
+  return atlasImagePromise;
+}
+
+// Draws a square "I reached Level N" card (game-board style, with the player's avatar) as a PNG file.
+async function makeLevelCard({ level, title, streak, layers }) {
+  const W = 1080;
+  const H = 1080;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  try { await document.fonts.ready; } catch (e) { /* ignore */ }
+
+  ctx.fillStyle = "#EDE3D0";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(43,35,24,0.07)";
+  for (let y = 20; y < H; y += 28) for (let x = 20; x < W; x += 28) ctx.fillRect(x, y, 3, 3);
+  ctx.strokeStyle = "#2B2318";
+  ctx.lineWidth = 10;
+  ctx.strokeRect(50, 50, W - 100, H - 100);
+  ctx.strokeStyle = "#C9BB9E";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(74, 74, W - 148, H - 148);
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#2B2318";
+  ctx.font = "700 64px Fraunces, Georgia, serif";
+  ctx.fillText("Sidequest", W / 2, 175);
+
+  try {
+    const atlas = await loadAtlas();
+    ctx.imageSmoothingEnabled = false;
+    const size = GEAR_FRAME * 6;
+    const ax = (W - size) / 2;
+    const ay = 215;
+    layers.forEach((id) => {
+      const g = GEAR_BY_ID[id];
+      if (g) ctx.drawImage(atlas, g.col * GEAR_FRAME, g.row * GEAR_FRAME, GEAR_FRAME, GEAR_FRAME, ax, ay, size, size);
+    });
+  } catch (e) { /* card still works without the avatar */ }
+
+  ctx.fillStyle = "#3F6C51";
+  ctx.font = "700 120px Fraunces, Georgia, serif";
+  ctx.fillText(`Level ${level}`, W / 2, 740);
+  ctx.fillStyle = "#2B2318";
+  ctx.font = "600 46px Fraunces, Georgia, serif";
+  ctx.fillText(title, W / 2, 810);
+  if (streak > 0) {
+    ctx.fillStyle = "#A6441F";
+    ctx.font = "600 38px 'Work Sans', Arial, sans-serif";
+    ctx.fillText(`🔥 ${streak}-day streak`, W / 2, 875);
+  }
+  ctx.fillStyle = "#5A4E3C";
+  ctx.font = "500 34px 'Work Sans', Arial, sans-serif";
+  ctx.fillText(window.location.host, W / 2, 965);
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  return blob ? new File([blob], `sidequest-level-${level}.png`, { type: "image/png" }) : null;
+}
+
 export default function Sidequest() {
   const [quests, setQuests] = useState([]);
   const [mainQuests, setMainQuests] = useState([]);
@@ -450,6 +588,17 @@ export default function Sidequest() {
   const [reminderEditId, setReminderEditId] = useState(null);
   const [reminderDraftHour, setReminderDraftHour] = useState(18);
 
+  // Sharing & friend quests
+  const [shareCard, setShareCard] = useState(null); // { level, title, celebrate } while the share card is open
+  const [shareFile, setShareFile] = useState(null);
+  const [sharePreview, setSharePreview] = useState(null);
+  const [pendingGift, setPendingGift] = useState(INITIAL_GIFT); // a quest a friend sent via link
+  const [sendingQuest, setSendingQuest] = useState(null); // quest being sent to a friend
+  const [playerName, setPlayerName] = useState(() => readPlayerName());
+  const [nameDraft, setNameDraft] = useState("");
+  const [friendDone, setFriendDone] = useState(null); // { from, title } right after finishing a friend's quest
+  const [friendSends, setFriendSends] = useState({ date: null, count: 0 });
+
   // Sign in (anonymously, silently) and load this user's cloud save.
   useEffect(() => {
     let cancelled = false;
@@ -467,6 +616,7 @@ export default function Sidequest() {
       setUnlockedGear(gameData.unlockedGear || []);
       setPets(gameData.pets || {});
       setActivePet(gameData.activePet || null);
+      setFriendSends(gameData.friendSends || { date: null, count: 0 });
       if (!gameData.character) setShowCustomizer(true);
     }
 
@@ -547,7 +697,7 @@ export default function Sidequest() {
     if (!loaded) return;
     const payload = {
       quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
-      character, equipment, unlockedGear, pets, activePet, savedAt: Date.now(),
+      character, equipment, unlockedGear, pets, activePet, friendSends, savedAt: Date.now(),
     };
     latestPayload.current = payload;
     writeLocalSave(payload);
@@ -566,7 +716,7 @@ export default function Sidequest() {
       setSaveState(error ? "local" : "saved");
     }, 600);
     return () => clearTimeout(saveTimer.current);
-  }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded, authUser]);
+  }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, friendSends, loaded, authUser]);
 
   // When the app is backgrounded/closed, push the latest state out immediately instead of waiting for the debounce.
   useEffect(() => {
@@ -764,6 +914,7 @@ export default function Sidequest() {
       if (freshGear.length > 0) msgs.push(`Unlocked ${freshGear.length} new item${freshGear.length === 1 ? "" : "s"}`);
       if (freshPets.length > 0) msgs.push(`New companion: ${freshPets.map((p) => `${p.emoji || "\u2728"} ${p.name}`).join(", ")}`);
       if (msgs.length > 0) showToast(msgs.join(" · "));
+      if (level > prevLevelRef.current) setShareCard({ level, title: titleForLevel(level), celebrate: true });
     }
     prevLevelRef.current = level;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -786,6 +937,100 @@ export default function Sidequest() {
     setToast(msg);
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }
+
+  function avatarLayers() {
+    const skinId = skinIdFor(character.bodyType, character.skinTone);
+    return [equipment.wings, skinId, character.hair, character.shoes, character.pants, character.shirt, equipment.shield, equipment.weapon].filter(Boolean);
+  }
+
+  // Draw the share card as soon as it opens, so tapping Share can open the share sheet instantly.
+  useEffect(() => {
+    if (!shareCard) return;
+    let cancelled = false;
+    let url = null;
+    setShareFile(null);
+    setSharePreview(null);
+    makeLevelCard({ level: shareCard.level, title: shareCard.title, streak, layers: avatarLayers() })
+      .then((file) => {
+        if (cancelled || !file) return;
+        url = URL.createObjectURL(file);
+        setShareFile(file);
+        setSharePreview(url);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shareCard]);
+
+  // Escape closes whichever popup is open.
+  useEffect(() => {
+    if (!shareCard && !sendingQuest) return;
+    function onKey(e) {
+      if (e.key === "Escape") { setShareCard(null); setSendingQuest(null); }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shareCard, sendingQuest]);
+
+  async function shareProgress() {
+    if (!shareCard) return;
+    const streakText = streak > 1 ? ` with a ${streak}-day streak` : "";
+    const text = shareCard.celebrate
+      ? `I just hit Level ${shareCard.level} (${shareCard.title}) on Sidequest${streakText}! 🎲 Think you can catch me?`
+      : `I'm Level ${shareCard.level} (${shareCard.title}) on Sidequest${streakText}! 🎲 Think you can catch me?`;
+    const result = await shareContent({ text, url: appUrl(), file: shareFile });
+    if (result === "cancelled") return;
+    if (result === "failed") { showToast("Couldn't open sharing here. Try it on your phone."); return; }
+    if (result === "copied") showToast("Copied! Paste it to your friends.");
+    setShareCard(null);
+  }
+
+  function openSendQuest(q) {
+    setNameDraft(playerName);
+    setSendingQuest(q);
+  }
+  async function sendQuestToFriend() {
+    const name = nameDraft.trim().slice(0, 24);
+    if (!name || !sendingQuest) return;
+    if (name !== playerName) { setPlayerName(name); writePlayerName(name); }
+    const q = sendingQuest;
+    const link = buildGiftLink(q, name);
+    const result = await shareContent({ text: `🎁 ${name} sent you a quest on Sidequest: "${q.title}". Accept it for bonus XP:`, url: link });
+    if (result === "cancelled") return;
+    if (result === "failed") window.prompt("Copy this link and send it to your friend:", link);
+    setSendingQuest(null);
+    const today = todayStr();
+    const sentToday = friendSends.date === today ? friendSends.count : 0;
+    const what = result === "shared" ? "Quest sent!" : "Link copied! Paste it to your friend.";
+    if (sentToday < SEND_REWARD_PER_DAY) {
+      setFriendSends({ date: today, count: sentToday + 1 });
+      setTotalXp((prev) => prev + SEND_REWARD_XP);
+      showToast(`${what} +${SEND_REWARD_XP}xp for helping a friend.`);
+    } else {
+      showToast(what);
+    }
+  }
+
+  function acceptGift() {
+    if (!pendingGift) return;
+    const g = pendingGift;
+    setQuests((prev) => [{ id: uid(), title: g.title, category: g.category, difficulty: g.difficulty, xp: friendXp(g.difficulty), fromFriend: g.from, createdAt: Date.now() }, ...prev]);
+    setPendingGift(null);
+    setView("home");
+    showToast(`Quest from ${g.from} added, with +50% bonus XP.`);
+  }
+
+  async function tellFriend() {
+    if (!friendDone) return;
+    const result = await shareContent({ text: `✅ Done! I finished "${friendDone.title}", the quest you sent me on Sidequest. Send me another:`, url: appUrl() });
+    if (result === "cancelled") return;
+    if (result === "copied") showToast("Copied! Paste it to your friend.");
+    if (result === "failed") { showToast("Couldn't open sharing here. Try it on your phone."); return; }
+    setFriendDone(null);
   }
 
   function registerCompletion(entry, defaultMessage) {
@@ -834,6 +1079,7 @@ export default function Sidequest() {
     if (!q) return;
     setQuests((prev) => prev.filter((x) => x.id !== id));
     registerCompletion({ ...q, completedAt: Date.now(), type: "side" }, FLAVOR[Math.floor(Math.random() * FLAVOR.length)]);
+    if (q.fromFriend) setFriendDone({ from: q.fromFriend, title: q.title });
   }
   function abandonQuest(id) {
     setQuests((prev) => prev.filter((x) => x.id !== id));
@@ -893,6 +1139,7 @@ export default function Sidequest() {
     setUnlockedGear([]);
     setPets({});
     setActivePet(null);
+    setFriendSends({ date: null, count: 0 });
     setIdeaPool([]);
     setSelectedIdeas(new Set());
     setShowCustomizer(true);
@@ -945,8 +1192,7 @@ export default function Sidequest() {
   const boardCol = (boardPos - 1) % BOARD_COLS;
 
   function Avatar({ scale }) {
-    const skinId = skinIdFor(character.bodyType, character.skinTone);
-    const layers = [equipment.wings, skinId, character.hair, character.shoes, character.pants, character.shirt, equipment.shield, equipment.weapon].filter(Boolean);
+    const layers = avatarLayers();
     return (
       <div style={{ position: "relative", width: GEAR_FRAME * scale, height: GEAR_FRAME * scale, flexShrink: 0 }}>
         {layers.map((id) => <div key={id} style={{ position: "absolute", inset: 0, ...gearStyle(id, scale) }} />)}
@@ -1183,6 +1429,32 @@ export default function Sidequest() {
         .sq-reset-btn:hover { color: var(--rust); }
         .sq-reset-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
 
+        .sq-friend-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--trail); font-weight: 600; }
+        .sq-icon-btn.gift { border-color: var(--line); color: var(--ink-soft); }
+        .sq-icon-btn.gift:hover { border-color: var(--trail); color: var(--trail); }
+        .sq-share-btn { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; font-weight: 600; padding: 6px 10px; background: var(--paper); color: var(--trail); border: 1.5px solid var(--trail); cursor: pointer; }
+        .sq-share-btn:hover { background: var(--trail); color: #fff; }
+        .sq-share-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+        .sq-promo.gift { border-color: var(--gold); background: #F6EDD6; }
+        .sq-promo.gift .sq-promo-icon { color: var(--gold); }
+        .sq-add-btn:disabled { opacity: 0.5; cursor: default; }
+        .sq-modal-backdrop { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(43,35,24,0.55); }
+        .sq-modal { width: 100%; max-width: 380px; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--paper); border: 3px solid var(--ink); padding: 20px 18px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.3); }
+        .sq-modal.celebrate { animation: sq-pop 0.35s ease-out; }
+        @keyframes sq-pop { from { transform: scale(0.85); opacity: 0; } to { transform: none; opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .sq-modal.celebrate { animation: none; } }
+        .sq-modal-kicker { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--gold); }
+        .sq-modal-title { font-family: 'Fraunces', serif; font-weight: 700; font-size: 22px; margin-top: 4px; word-break: break-word; }
+        .sq-modal-sub { font-size: 13px; color: var(--ink-soft); margin: 4px 0 12px; line-height: 1.5; }
+        .sq-share-preview { aspect-ratio: 1 / 1; border: 1.5px solid var(--ink); background: var(--paper-deep); display: flex; align-items: center; justify-content: center; }
+        .sq-share-preview img { width: 100%; height: 100%; display: block; }
+        .sq-share-loading { font-size: 12.5px; color: var(--ink-soft); font-style: italic; }
+        .sq-modal-label { display: block; text-align: left; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+        .sq-modal .sq-input { width: 100%; }
+        .sq-modal-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+        .sq-modal-close { font-size: 13px; font-weight: 600; padding: 10px 14px; background: none; border: 1.5px solid var(--line); color: var(--ink-soft); cursor: pointer; }
+        .sq-modal-close:hover { border-color: var(--ink); color: var(--ink); }
+
         @media (max-width: 420px) { .sq-title { font-size: 27px; } .sq-form-row { flex-direction: column; } .sq-add-btn { justify-content: center; } .sq-character-row { flex-direction: column; align-items: center; } }
       `}</style>
 
@@ -1323,6 +1595,32 @@ export default function Sidequest() {
           </button>
         </div>
 
+        {loaded && pendingGift && (
+          <div className="sq-promo gift">
+            <Gift size={20} className="sq-promo-icon" />
+            <div className="sq-promo-body">
+              <div className="sq-promo-title">{pendingGift.from} sent you a quest!</div>
+              <div className="sq-promo-text">
+                <strong>{pendingGift.title}</strong> · {CATEGORIES.find((c) => c.id === pendingGift.category)?.label} · {friendXp(pendingGift.difficulty)}xp with the friend bonus
+              </div>
+              <button type="button" className="sq-add-btn" onClick={acceptGift}><Plus size={16} strokeWidth={2.5} />Accept quest</button>
+            </div>
+            <button type="button" className="sq-promo-close" onClick={() => setPendingGift(null)} aria-label="Decline this quest"><X size={15} strokeWidth={2.5} /></button>
+          </div>
+        )}
+
+        {friendDone && (
+          <div className="sq-promo gift">
+            <Check size={20} className="sq-promo-icon" />
+            <div className="sq-promo-body">
+              <div className="sq-promo-title">You finished {friendDone.from}'s quest!</div>
+              <div className="sq-promo-text">Let them know, and dare them to send you another.</div>
+              <button type="button" className="sq-add-btn" onClick={tellFriend}><Share2 size={15} />Tell {friendDone.from}</button>
+            </div>
+            <button type="button" className="sq-promo-close" onClick={() => setFriendDone(null)} aria-label="Dismiss"><X size={15} strokeWidth={2.5} /></button>
+          </div>
+        )}
+
         {view === "home" && !installHidden && !installDone && !runningAsInstalledApp() && (installEvent || isIOSDevice()) && (
           <div className="sq-promo">
             <Download size={20} className="sq-promo-icon" />
@@ -1399,6 +1697,9 @@ export default function Sidequest() {
                 {streak > 0 && (<div className="sq-streak"><Flame size={15} strokeWidth={2.5} />{streak}-day streak</div>)}
               </div>
               <div className="sq-xp-label">{xpIntoLevel} / {xpForNext} xp to level {level + 1} · {totalXp} xp total</div>
+              <button type="button" className="sq-share-btn" onClick={() => setShareCard({ level, title: titleForLevel(level), celebrate: false })}>
+                <Share2 size={13} />Share my level
+              </button>
 
               <div className="sq-character-row">
                 <Avatar scale={3} />
@@ -1616,10 +1917,11 @@ export default function Sidequest() {
                     <div className="sq-quest-body">
                       <div className="sq-quest-main">
                         <div className="sq-quest-title">{q.title}</div>
-                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} · {diff.label} · {q.xp}xp{Number.isInteger(q.reminderHour) && (<span className="sq-remind-tag"><Bell size={11} />{hourLabel(q.reminderHour)}</span>)}</div>
+                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} · {diff.label} · {q.xp}xp{q.fromFriend && (<span className="sq-friend-tag"><Gift size={11} />from {q.fromFriend}</span>)}{Number.isInteger(q.reminderHour) && (<span className="sq-remind-tag"><Bell size={11} />{hourLabel(q.reminderHour)}</span>)}</div>
                       </div>
                       <div className="sq-quest-actions">
                         <button className={`sq-icon-btn bell ${Number.isInteger(q.reminderHour) ? "set" : ""}`} onClick={() => (reminderEditId === q.id ? setReminderEditId(null) : openReminderEditor(q))} aria-label={`Set a reminder for ${q.title}`}><Bell size={15} strokeWidth={2} /></button>
+                        <button className="sq-icon-btn gift" onClick={() => openSendQuest(q)} aria-label={`Send ${q.title} to a friend`}><Gift size={15} strokeWidth={2.2} /></button>
                         <button className="sq-icon-btn complete" onClick={() => completeQuest(q.id)} aria-label={`Complete ${q.title}`}><Check size={16} strokeWidth={2.5} /></button>
                         <button className="sq-icon-btn abandon" onClick={() => abandonQuest(q.id)} aria-label={`Abandon ${q.title}`}><X size={15} strokeWidth={2.5} /></button>
                       </div>
@@ -1664,6 +1966,45 @@ export default function Sidequest() {
           <a href="/credits.html">Credits</a>
         </div>
       </div>
+
+      {shareCard && (
+        <div className="sq-modal-backdrop" onClick={() => setShareCard(null)}>
+          <div className={`sq-modal ${shareCard.celebrate ? "celebrate" : ""}`} role="dialog" aria-modal="true" aria-label={`Level ${shareCard.level}`} onClick={(e) => e.stopPropagation()}>
+            {shareCard.celebrate && <div className="sq-modal-kicker">{"\ud83c\udf89"} Level up!</div>}
+            <div className="sq-modal-title">{shareCard.celebrate ? `You reached Level ${shareCard.level}` : `You're Level ${shareCard.level}`}</div>
+            <div className="sq-modal-sub">{shareCard.title}{shareCard.celebrate ? " \u2014 show your friends." : ""}</div>
+            <div className="sq-share-preview">
+              {sharePreview ? <img src={sharePreview} alt={`Level ${shareCard.level} card`} /> : <div className="sq-share-loading">Drawing your card…</div>}
+            </div>
+            <div className="sq-modal-actions">
+              <button type="button" className="sq-add-btn" onClick={shareProgress}><Share2 size={15} />Share with friends</button>
+              <button type="button" className="sq-modal-close" onClick={() => setShareCard(null)}>{shareCard.celebrate ? "Keep going" : "Close"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sendingQuest && (
+        <div className="sq-modal-backdrop" onClick={() => setSendingQuest(null)}>
+          <div className="sq-modal" role="dialog" aria-modal="true" aria-label="Send a quest to a friend" onClick={(e) => e.stopPropagation()}>
+            <div className="sq-modal-kicker"><Gift size={13} />Send to a friend</div>
+            <div className="sq-modal-title">{sendingQuest.title}</div>
+            <div className="sq-modal-sub">
+              Your friend gets this quest with +50% bonus XP. You get +{SEND_REWARD_XP}xp for helping (up to {SEND_REWARD_PER_DAY} a day).
+            </div>
+            <label className="sq-modal-label" htmlFor="sq-send-name">Your name, so they know who sent it</label>
+            <input
+              id="sq-send-name" className="sq-input" placeholder="e.g. Alex" maxLength={24}
+              value={nameDraft} onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") sendQuestToFriend(); }}
+            />
+            <div className="sq-modal-actions">
+              <button type="button" className="sq-add-btn" onClick={sendQuestToFriend} disabled={!nameDraft.trim()}><Share2 size={15} />Send quest</button>
+              <button type="button" className="sq-modal-close" onClick={() => setSendingQuest(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (<div className="sq-toast"><Sparkles size={14} />{toast}</div>)}
       {saveError && !authInitError && (<div className="sq-toast" style={{ bottom: 68, background: "#A6441F" }}>Cloud sync hiccup — your progress is safe on this device and will retry.</div>)}
