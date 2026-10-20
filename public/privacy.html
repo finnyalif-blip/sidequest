@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#3F6C51" />
+<title>Privacy — Sidequest</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root { --paper: #EDE3D0; --ink: #2B2318; --ink-soft: #5A4E3C; --trail: #3F6C51; --line: #C9BB9E; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 680px; margin: 0 auto; padding: 28px 18px 60px; }
+  a { color: var(--trail); }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-size: 32px; line-height: 1.2; margin: 18px 0 4px; }
+  h2 { font-family: Georgia, "Times New Roman", serif; font-size: 20px; margin: 30px 0 6px; padding-top: 14px; border-top: 1.5px solid var(--line); }
+  p, li { color: var(--ink); }
+  .meta { color: var(--ink-soft); font-size: 14px; margin: 0 0 18px; }
+  .back { display: inline-block; font-size: 14px; font-weight: 600; text-decoration: none; }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .box { border: 1.5px solid var(--ink); padding: 12px 14px; background: rgba(255,255,255,0.45); }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #1F1A12; --ink: #EDE3D0; --ink-soft: #B5A98F; --trail: #7FBF99; --line: #4A4033; }
+    .box { background: rgba(255,255,255,0.05); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">&larr; Back to Sidequest</a>
+  <h1>Privacy</h1>
+  <p class="meta">Last updated October 20, 2026</p>
+
+  <p>Sidequest turns your to-dos into quests. This page explains, in plain language, what the app stores about you, who helps run it, and how to get your data removed. It is run by an independent developer, not a big company.</p>
+
+  <h2>What Sidequest stores</h2>
+  <ul>
+    <li><strong>Your game.</strong> The quests you type, your completed quests, XP, level, streak, character look, pets, and any reminder times you set on quests. This is saved in your browser on your device and also in our cloud database, so it is still there next time you open the app.</li>
+    <li><strong>An anonymous account.</strong> The first time you open Sidequest it creates an account with a random ID. No name or email is needed.</li>
+    <li><strong>Your email, only if you add one.</strong> If you choose to add an email so you can open your game on another device, we store it and use it to send you sign-in links. We don't send newsletters or marketing.</li>
+    <li><strong>Notification details, only if you turn on reminders.</strong> Your browser gives us a private notification address and keys so we can send you reminders. We also store the time you picked and your time zone, so reminders arrive at the right local hour.</li>
+    <li><strong>Sign-in session.</strong> Your browser keeps a sign-in token in its storage so you stay signed in.</li>
+  </ul>
+  <p>The quest titles are whatever you type, so please don't put anything in them that you wouldn't want stored.</p>
+
+  <h2>What Sidequest does not do</h2>
+  <ul>
+    <li>No ads.</li>
+    <li>No analytics or tracking tools.</li>
+    <li>We never sell your data or share it for marketing.</li>
+  </ul>
+
+  <h2>Who handles your data</h2>
+  <p>Sidequest relies on a few services to work. They process data only to provide their service to us.</p>
+  <ul>
+    <li><strong>Supabase</strong> stores your account and game save and handles sign-in.</li>
+    <li><strong>Vercel</strong> hosts the website. Like most hosts, it may log basic request information such as your IP address.</li>
+    <li><strong>An email delivery service</strong> sends sign-in links, only if you add an email.</li>
+    <li><strong>Your browser's notification service</strong> (run by Google, Apple, or Mozilla, depending on your device) delivers reminders. A reminder can include the title of a quest you set a reminder on.</li>
+    <li><strong>Google Fonts</strong> provides the app's fonts. When the app loads, your browser requests the fonts from Google, which can see your IP address.</li>
+  </ul>
+
+  <h2>Keeping and deleting your data</h2>
+  <ul>
+    <li>We keep your data until you ask us to delete it.</li>
+    <li><strong>Reset progress</strong> in the app clears your quests, XP, character, and pets from your device and from your cloud save. It does not remove your account ID or email.</li>
+    <li><strong>Turn off reminders</strong> any time with the bell at the top of the app. That removes your notification details from our database.</li>
+    <li>To delete everything, including your account and email, write to the contact address below and we'll remove it.</li>
+    <li>Clearing your browser's site data removes the copy on your device. If you never added an email, that can mean losing access to your cloud save, which is why we suggest adding one.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>Sidequest is not meant for children under 13, and we don't knowingly collect data from them.</p>
+
+  <h2>Changes</h2>
+  <p>If this page changes in a meaningful way, we'll update the date at the top.</p>
+
+  <h2>Contact</h2>
+  <p class="box">Questions, or want your data deleted? Email <a href="mailto:finnyalif@gmail.com">finnyalif@gmail.com</a>.</p>
+
+  <p style="margin-top:28px"><a href="/credits.html">Art credits</a></p>
+</main>
+</body>
+</html>
