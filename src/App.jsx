@@ -4,8 +4,8 @@ import {
   reminderSupport, currentReminderState, enableReminders, disableReminders, updateNudge, syncTimezone, sendTestNotification,
 } from "./notifications.js";
 import {
-  Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles,
-  Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords, Bell } from "lucide-react";
+  Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles, Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords, Bell, Download, Shield,
+} from "lucide-react";
 
 const CATEGORIES = [
   { id: "errand", label: "Errand", color: "#A6441F", Icon: MapPin },
@@ -341,6 +341,31 @@ function hourLabel(h) {
   return `${h - 12}:00 PM`;
 }
 
+// ---- Install / email prompts: small per-device flags, wrapped so blocked storage can't break the app ----
+const DAY_MS = 24 * 60 * 60 * 1000;
+function dismissedRecently(key, days) {
+  try {
+    const t = Number(window.localStorage.getItem(key) || 0);
+    return t > 0 && Date.now() - t < days * DAY_MS;
+  } catch (e) {
+    return false;
+  }
+}
+function markDismissed(key) {
+  try { window.localStorage.setItem(key, String(Date.now())); } catch (e) { /* ignore */ }
+}
+function runningAsInstalledApp() {
+  try {
+    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  } catch (e) {
+    return false;
+  }
+}
+function isIOSDevice() {
+  const ua = navigator.userAgent || "";
+  return /iphone|ipad|ipod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
 // ---- Local backup: progress is ALWAYS written here first, so it survives even if cloud sign-in/save fails. ----
 const LOCAL_SAVE_KEY = "sidequest:save:v1";
 function readLocalSave() {
@@ -417,6 +442,11 @@ export default function Sidequest() {
   const [reminder, setReminder] = useState({ supported: false, reason: "", permission: "default", subscribed: false, hour: 18, nudgeOn: true });
   const [reminderBusy, setReminderBusy] = useState(false);
   const [showReminderPanel, setShowReminderPanel] = useState(false);
+  const [installEvent, setInstallEvent] = useState(null);
+  const [installDone, setInstallDone] = useState(false);
+  const [showIOSHelp, setShowIOSHelp] = useState(false);
+  const [installHidden, setInstallHidden] = useState(() => dismissedRecently("sidequest:installDismissedAt", 14));
+  const [emailNudgeHidden, setEmailNudgeHidden] = useState(() => dismissedRecently("sidequest:emailNudgeDismissedAt", 14));
   const [reminderEditId, setReminderEditId] = useState(null);
   const [reminderDraftHour, setReminderDraftHour] = useState(18);
 
@@ -568,6 +598,50 @@ export default function Sidequest() {
     });
     return () => { cancelled = true; };
   }, [authUser]);
+
+  // Capture the browser's "install" offer (Android / desktop Chrome and Edge) so we can show our own button.
+  useEffect(() => {
+    function onBeforeInstall(e) {
+      e.preventDefault();
+      setInstallEvent(e);
+    }
+    function onInstalled() {
+      setInstallEvent(null);
+      setInstallDone(true);
+    }
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  async function installApp() {
+    if (!installEvent) return;
+    try {
+      installEvent.prompt();
+      await installEvent.userChoice;
+    } catch (e) { /* ignore */ }
+    setInstallEvent(null);
+  }
+  function hideInstallCard() {
+    markDismissed("sidequest:installDismissedAt");
+    setInstallHidden(true);
+    setShowIOSHelp(false);
+  }
+  function hideEmailNudge() {
+    markDismissed("sidequest:emailNudgeDismissedAt");
+    setEmailNudgeHidden(true);
+  }
+  function openEmailPanel() {
+    setAccountMode("link");
+    setShowAccountPanel(true);
+    setShowReminderPanel(false);
+    setEmailNudgeHidden(true);
+    markDismissed("sidequest:emailNudgeDismissedAt");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 
   async function toggleReminders() {
     if (reminderBusy) return;
@@ -1093,6 +1167,18 @@ export default function Sidequest() {
 
         .sq-toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--paper); padding: 10px 18px; font-size: 13.5px; font-weight: 500; display: flex; align-items: center; gap: 7px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); max-width: 90%; text-align: center; }
         .sq-reset-row { text-align: center; margin-top: 30px; padding-top: 14px; border-top: 1px dashed var(--line); }
+        .sq-promo { display: flex; align-items: flex-start; gap: 12px; border: 1.5px solid var(--ink); background: var(--paper-deep); padding: 12px 12px 12px 14px; margin-bottom: 14px; }
+        .sq-promo-icon { flex-shrink: 0; margin-top: 2px; color: var(--trail); }
+        .sq-promo-body { flex: 1; min-width: 0; }
+        .sq-promo-title { font-family: 'Fraunces', serif; font-weight: 600; font-size: 15px; }
+        .sq-promo-text { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; margin: 2px 0 10px; }
+        .sq-promo-steps { margin: 10px 0 0; padding-left: 20px; font-size: 12.5px; color: var(--ink); line-height: 1.6; }
+        .sq-promo-close { flex-shrink: 0; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: none; border: 1.5px solid var(--line); color: var(--ink-soft); cursor: pointer; }
+        .sq-promo-close:hover { border-color: var(--ink); color: var(--ink); }
+        .sq-promo-close:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+        .sq-footer-links { display: flex; justify-content: center; gap: 8px; padding: 4px 0 18px; font-size: 11.5px; color: var(--ink-soft); }
+        .sq-footer-links a { color: var(--ink-soft); }
+        .sq-footer-links a:hover { color: var(--trail); }
         .sq-reset-btn { background: none; border: none; color: var(--ink-soft); font-size: 11.5px; text-decoration: underline; cursor: pointer; padding: 4px; }
         .sq-reset-btn:hover { color: var(--rust); }
         .sq-reset-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
@@ -1236,6 +1322,43 @@ export default function Sidequest() {
             <MapIcon size={15} />Adventure Map
           </button>
         </div>
+
+        {view === "home" && !installHidden && !installDone && !runningAsInstalledApp() && (installEvent || isIOSDevice()) && (
+          <div className="sq-promo">
+            <Download size={20} className="sq-promo-icon" />
+            <div className="sq-promo-body">
+              <div className="sq-promo-title">Install Sidequest</div>
+              <div className="sq-promo-text">Add it to your home screen to open it in one tap, full screen, with reminders.</div>
+              {installEvent ? (
+                <button type="button" className="sq-add-btn" onClick={installApp}>Install</button>
+              ) : (
+                <>
+                  <button type="button" className="sq-add-btn" onClick={() => setShowIOSHelp((v) => !v)}>{showIOSHelp ? "Hide steps" : "Show me how"}</button>
+                  {showIOSHelp && (
+                    <ol className="sq-promo-steps">
+                      <li>Tap the <strong>Share</strong> button (the square with an arrow) in Safari.</li>
+                      <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+                      <li>Tap <strong>Add</strong>, then open Sidequest from your home screen.</li>
+                    </ol>
+                  )}
+                </>
+              )}
+            </div>
+            <button type="button" className="sq-promo-close" onClick={hideInstallCard} aria-label="Dismiss install suggestion"><X size={15} strokeWidth={2.5} /></button>
+          </div>
+        )}
+
+        {view === "home" && authUser && !authUser.email && !emailNudgeHidden && completed.length >= 3 && (
+          <div className="sq-promo">
+            <Shield size={20} className="sq-promo-icon" />
+            <div className="sq-promo-body">
+              <div className="sq-promo-title">Don't lose your progress</div>
+              <div className="sq-promo-text">Add an email so your game is safe if you switch phones or clear your browser. It takes a few seconds.</div>
+              <button type="button" className="sq-add-btn" onClick={openEmailPanel}>Add email</button>
+            </div>
+            <button type="button" className="sq-promo-close" onClick={hideEmailNudge} aria-label="Dismiss email suggestion"><X size={15} strokeWidth={2.5} /></button>
+          </div>
+        )}
 
         {view === "map" ? (
           <div>
@@ -1534,6 +1657,11 @@ export default function Sidequest() {
           <button type="button" className="sq-reset-btn" onClick={() => { if (window.confirm("Reset all progress? Your level, gear, pets, and quests will all be wiped. This can't be undone.")) resetProgress(); }}>
             Reset progress
           </button>
+        </div>
+        <div className="sq-footer-links">
+          <a href="/privacy.html">Privacy</a>
+          <span aria-hidden="true">·</span>
+          <a href="/credits.html">Credits</a>
         </div>
       </div>
 
