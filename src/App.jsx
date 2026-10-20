@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient.js";
 import {
+  reminderSupport, currentReminderState, enableReminders, disableReminders, updateReminderHour, sendTestNotification,
+} from "./notifications.js";
+import {
   Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles,
-  Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords,
-} from "lucide-react";
+  Crown, Shuffle, Compass, Dice5, Lock, ClipboardList, Map as MapIcon, Shirt, Swords, Bell } from "lucide-react";
 
 const CATEGORIES = [
   { id: "errand", label: "Errand", color: "#A6441F", Icon: MapPin },
@@ -332,6 +334,29 @@ function hashStr(str) {
   return Math.abs(h);
 }
 
+// ---- Local backup: progress is ALWAYS written here first, so it survives even if cloud sign-in/save fails. ----
+const LOCAL_SAVE_KEY = "sidequest:save:v1";
+function readLocalSave() {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function writeLocalSave(payload) {
+  try {
+    window.localStorage.setItem(LOCAL_SAVE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    /* storage full or blocked — cloud save is still attempted */
+  }
+}
+function newerSave(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  return (b.savedAt || 0) > (a.savedAt || 0) ? b : a;
+}
+
 export default function Sidequest() {
   const [quests, setQuests] = useState([]);
   const [mainQuests, setMainQuests] = useState([]);
@@ -378,12 +403,34 @@ export default function Sidequest() {
   const [accountEmail, setAccountEmail] = useState("");
   const [accountStatus, setAccountStatus] = useState(null); // { type: "sent"|"error", message }
   const saveTimer = useRef(null);
+  const latestPayload = useRef(null);
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | local
+  const [reminder, setReminder] = useState({ supported: false, reason: "", permission: "default", subscribed: false, hour: 18 });
+  const [reminderBusy, setReminderBusy] = useState(false);
 
   // Sign in (anonymously, silently) and load this user's cloud save.
   useEffect(() => {
     let cancelled = false;
 
+    function applyGameData(gameData) {
+      setQuests(gameData.quests || []);
+      setMainQuests(gameData.mainQuests || []);
+      setCompleted(gameData.completed || []);
+      setTotalXp(Number.isFinite(gameData.totalXp) ? gameData.totalXp : 0);
+      setStreak(gameData.streak || 0);
+      setLastCompletionDate(gameData.lastCompletionDate || null);
+      setDailyBonus(gameData.dailyBonus || null);
+      setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
+      setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
+      setUnlockedGear(gameData.unlockedGear || []);
+      setPets(gameData.pets || {});
+      setActivePet(gameData.activePet || null);
+      if (!gameData.character) setShowCustomizer(true);
+    }
+
     async function init() {
+      const local = readLocalSave();
+      let cloud = null;
       try {
         const { data: { session } } = await supabase.auth.getSession();
         let user = session?.user || null;
@@ -399,41 +446,25 @@ export default function Sidequest() {
         const { data: row, error: rowError } = await supabase.from("game_saves").select("data").eq("user_id", user.id).maybeSingle();
         if (rowError) throw rowError;
         if (cancelled) return;
-
-        if (row && row.data) {
-          const gameData = row.data;
-          setQuests(gameData.quests || []);
-          setMainQuests(gameData.mainQuests || []);
-          setCompleted(gameData.completed || []);
-          setTotalXp(Number.isFinite(gameData.totalXp) ? gameData.totalXp : 0);
-          setStreak(gameData.streak || 0);
-          setLastCompletionDate(gameData.lastCompletionDate || null);
-          setDailyBonus(gameData.dailyBonus || null);
-          setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
-          setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
-          setUnlockedGear(gameData.unlockedGear || []);
-          setPets(gameData.pets || {});
-          setActivePet(gameData.activePet || null);
-          if (!gameData.character) setShowCustomizer(true);
-        } else {
-          setShowCustomizer(true);
-        }
+        cloud = row && row.data ? row.data : null;
       } catch (err) {
         if (cancelled) return;
         // eslint-disable-next-line no-console
         console.error("Sidequest: startup sign-in/load failed —", err);
         setAuthInitError(
           err?.message === "Auth session missing!"
-            ? "Couldn't start a save session. If you're the developer: check that Anonymous Sign-Ins are enabled in your Supabase project's Authentication \u2192 Providers settings."
-            : "Couldn't connect to your saved progress. You can keep playing, but nothing will be saved until you refresh with a working connection."
+            ? "Cloud saving isn't switched on yet (Anonymous Sign-Ins are off in Supabase). Your progress is still being saved on this device."
+            : "Couldn't reach the cloud save. Your progress is still being saved on this device and will sync when the connection works."
         );
-        setShowCustomizer(true);
-      } finally {
-        if (!cancelled) {
-          setAuthReady(true);
-          setLoaded(true);
-        }
       }
+
+      if (cancelled) return;
+      // Use whichever copy is newer: cloud (other devices) or this device's local backup.
+      const chosen = newerSave(cloud, local);
+      if (chosen) applyGameData(chosen);
+      else setShowCustomizer(true);
+      setAuthReady(true);
+      setLoaded(true);
     }
 
     init();
@@ -452,22 +483,84 @@ export default function Sidequest() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save to the cloud (debounced) whenever the game state actually changes.
+  // Save on every change: instantly to this device, then (debounced) to the cloud.
   useEffect(() => {
-    if (!loaded || !authUser) return;
+    if (!loaded) return;
+    const payload = {
+      quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
+      character, equipment, unlockedGear, pets, activePet, savedAt: Date.now(),
+    };
+    latestPayload.current = payload;
+    writeLocalSave(payload);
+    if (!authUser) {
+      setSaveState("local");
+      return;
+    }
+    setSaveState("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      const payload = {
-        quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus,
-        character, equipment, unlockedGear, pets, activePet,
-      };
       const { error } = await supabase.from("game_saves").upsert({
         user_id: authUser.id, data: payload, updated_at: new Date().toISOString(),
       });
       setSaveError(!!error);
+      setSaveState(error ? "local" : "saved");
     }, 600);
     return () => clearTimeout(saveTimer.current);
   }, [quests, mainQuests, completed, totalXp, streak, lastCompletionDate, dailyBonus, character, equipment, unlockedGear, pets, activePet, loaded, authUser]);
+
+  // When the app is backgrounded/closed, push the latest state out immediately instead of waiting for the debounce.
+  useEffect(() => {
+    function flush() {
+      if (document.visibilityState === "hidden" && latestPayload.current) {
+        writeLocalSave(latestPayload.current);
+        if (authUser) {
+          supabase.from("game_saves").upsert({
+            user_id: authUser.id, data: latestPayload.current, updated_at: new Date().toISOString(),
+          }).then(() => {}, () => {});
+        }
+      }
+    }
+    document.addEventListener("visibilitychange", flush);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", flush);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [authUser]);
+
+  // Reminder (push notification) state, read once the user is known.
+  useEffect(() => {
+    let cancelled = false;
+    currentReminderState().then((s) => { if (!cancelled) setReminder(s); });
+    return () => { cancelled = true; };
+  }, [authUser]);
+
+  async function toggleReminders() {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    try {
+      const res = reminder.subscribed
+        ? await disableReminders(supabase)
+        : await enableReminders(supabase, authUser, reminder.hour);
+      if (res.error) showToast(res.error);
+      setReminder(await currentReminderState());
+    } finally {
+      setReminderBusy(false);
+    }
+  }
+  async function changeReminderHour(hour) {
+    setReminder((r) => ({ ...r, hour }));
+    if (reminder.subscribed) {
+      const res = await updateReminderHour(supabase, hour);
+      if (res.error) showToast(res.error);
+    } else {
+      try { window.localStorage.setItem("sidequest:reminderHour", String(hour)); } catch (e) { /* ignore */ }
+    }
+  }
+  async function testReminder() {
+    const res = await sendTestNotification();
+    if (res.error) showToast(res.error);
+  }
 
   async function sendAccountEmail() {
     const trimmed = accountEmail.trim();
@@ -773,6 +866,8 @@ export default function Sidequest() {
         .sq-account-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
         .sq-account-tab { font-size: 12px; font-weight: 600; padding: 6px 10px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
         .sq-account-tab.active { border-color: var(--ink); background: #fff; color: var(--ink); }
+        .sq-reminder-block { margin-top: 14px; padding-top: 12px; border-top: 1.5px dashed var(--line); }
+        .sq-reminder-title { display: flex; align-items: center; gap: 6px; font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
         .sq-account-text { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 10px; line-height: 1.5; }
         .sq-account-form { display: flex; gap: 8px; }
         .sq-account-status { font-size: 12px; margin: 8px 0 0; }
@@ -941,7 +1036,7 @@ export default function Sidequest() {
               className="sq-account-btn"
               onClick={() => { setShowAccountPanel((v) => !v); setAccountStatus(null); }}
             >
-              {authUser?.email ? `\u2713 ${authUser.email}` : authInitError ? "\u26a0 Can't save" : "Save progress"}
+              {authUser?.email ? `\u2713 ${authUser.email}` : authInitError ? "\u26a0 Device only" : "Save progress"}
             </button>
             <button type="button" className="sq-die-btn" onClick={rollForQuest} aria-label="Roll the die for a random quest">
               <Dice5 size={26} strokeWidth={1.75} />
@@ -984,6 +1079,47 @@ export default function Sidequest() {
                 )}
               </>
             )}
+
+            <div className="sq-reminder-block">
+              <div className="sq-reminder-title"><Bell size={14} /> Daily reminder</div>
+              {!reminder.supported ? (
+                <p className="sq-account-text">{reminder.reason || "Notifications aren't available in this browser."}</p>
+              ) : !authUser ? (
+                <p className="sq-account-text">Reminders need cloud saving switched on first, so they can reach you when the app is closed.</p>
+              ) : (
+                <>
+                  <p className="sq-account-text">
+                    {reminder.subscribed
+                      ? "You'll get a nudge once a day if you haven't finished a quest yet."
+                      : "Get a nudge once a day if you haven't finished a quest, so your streak survives."}
+                  </p>
+                  <div className="sq-account-form">
+                    <select
+                      className="sq-input" value={reminder.hour}
+                      onChange={(e) => changeReminderHour(Number(e.target.value))}
+                      aria-label="Reminder time"
+                    >
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <option key={h} value={h}>
+                          {h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="button" className="sq-add-btn" onClick={toggleReminders} disabled={reminderBusy}>
+                      {reminder.subscribed ? "Turn off" : "Turn on"}
+                    </button>
+                  </div>
+                  {reminder.subscribed && (
+                    <button type="button" className="sq-account-signout" style={{ marginTop: 10, color: "var(--ink-soft)", borderColor: "var(--line)" }} onClick={testReminder}>
+                      Send a test notification
+                    </button>
+                  )}
+                  {reminder.permission === "denied" && (
+                    <p className="sq-account-status error">Notifications are blocked for this site. Allow them in your browser or phone settings, then try again.</p>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -1275,7 +1411,7 @@ export default function Sidequest() {
       </div>
 
       {toast && (<div className="sq-toast"><Sparkles size={14} />{toast}</div>)}
-      {saveError && (<div className="sq-toast" style={{ bottom: 68, background: "#A6441F" }}>Couldn't save — your progress may not persist.</div>)}
+      {saveError && !authInitError && (<div className="sq-toast" style={{ bottom: 68, background: "#A6441F" }}>Cloud sync hiccup — your progress is safe on this device and will retry.</div>)}
     </div>
   );
 }

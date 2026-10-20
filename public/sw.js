@@ -1,7 +1,7 @@
 // Sidequest service worker
 // Strategy: small app-shell precache + runtime cache for everything else same-origin.
 // Bump CACHE_VERSION any time you want to force clients to drop old cached files.
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const SHELL_CACHE = `sidequest-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `sidequest-runtime-${CACHE_VERSION}`;
 
@@ -67,6 +67,40 @@ self.addEventListener("fetch", (event) => {
         })
         .catch(() => cached);
       return cached || networkFetch;
+    })
+  );
+});
+
+// ---- Push notifications (daily reminders) ----
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (e) {
+    payload = { body: event.data ? event.data.text() : "" };
+  }
+  const title = payload.title || "Sidequest";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || "A quest is waiting for you.",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: payload.tag || "sidequest-daily",
+      renotify: false,
+      data: { url: payload.url || "/" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) return client.focus();
+      }
+      return self.clients.openWindow(target);
     })
   );
 });
