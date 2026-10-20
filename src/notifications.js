@@ -3,6 +3,7 @@
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY;
 const HOUR_KEY = "sidequest:reminderHour";
+const NUDGE_KEY = "sidequest:nudgeOn";
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -42,9 +43,17 @@ function savedHour() {
   }
 }
 
+function savedNudge() {
+  try {
+    return window.localStorage.getItem(NUDGE_KEY) !== "0";
+  } catch (e) {
+    return true;
+  }
+}
+
 export async function currentReminderState() {
   const support = reminderSupport();
-  const base = { supported: support.supported, reason: support.reason, permission: "default", subscribed: false, hour: savedHour() };
+  const base = { supported: support.supported, reason: support.reason, permission: "default", subscribed: false, hour: savedHour(), nudgeOn: savedNudge() };
   if (!("Notification" in window)) return base;
   base.permission = Notification.permission;
   if (!support.supported) return base;
@@ -58,7 +67,7 @@ export async function currentReminderState() {
   return base;
 }
 
-export async function enableReminders(supabase, user, hour) {
+export async function enableReminders(supabase, user, hour, nudgeOn = true) {
   const support = reminderSupport();
   if (!support.supported) return { error: support.reason };
   if (!user) return { error: "Cloud saving needs to be on first." };
@@ -81,14 +90,14 @@ export async function enableReminders(supabase, user, hour) {
       user_id: user.id,
       p256dh: json.keys.p256dh,
       auth: json.keys.auth,
-      remind_hour: hour,
+      remind_hour: nudgeOn ? hour : null,
       tz,
     });
     if (error) {
       await sub.unsubscribe();
       return { error: "Couldn't save your reminder. Try again in a moment." };
     }
-    try { window.localStorage.setItem(HOUR_KEY, String(hour)); } catch (e) { /* ignore */ }
+    try { window.localStorage.setItem(HOUR_KEY, String(hour)); window.localStorage.setItem(NUDGE_KEY, nudgeOn ? "1" : "0"); } catch (e) { /* ignore */ }
     return {};
   } catch (e) {
     return { error: "Couldn't turn on reminders on this device." };
@@ -110,18 +119,34 @@ export async function disableReminders(supabase) {
   }
 }
 
-export async function updateReminderHour(supabase, hour) {
+// Saves the "daily nudge for all quests" choice (time + on/off). Always remembered on this device; sent to the server if reminders are on.
+export async function updateNudge(supabase, hour, nudgeOn) {
+  try { window.localStorage.setItem(HOUR_KEY, String(hour)); window.localStorage.setItem(NUDGE_KEY, nudgeOn ? "1" : "0"); } catch (e) { /* ignore */ }
   try {
+    if (!("serviceWorker" in navigator)) return {};
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     if (!sub) return {};
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    const { error } = await supabase.from("push_subscriptions").update({ remind_hour: hour, tz }).eq("endpoint", sub.endpoint);
+    const { error } = await supabase.from("push_subscriptions").update({ remind_hour: nudgeOn ? hour : null, tz }).eq("endpoint", sub.endpoint);
     if (error) return { error: "Couldn't change the reminder time." };
-    try { window.localStorage.setItem(HOUR_KEY, String(hour)); } catch (e) { /* ignore */ }
     return {};
   } catch (e) {
     return { error: "Couldn't change the reminder time." };
+  }
+}
+
+// Keeps the server's idea of your time zone current (e.g. after travelling), so reminders arrive at your local time.
+export async function syncTimezone(supabase) {
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    await supabase.from("push_subscriptions").update({ tz }).eq("endpoint", sub.endpoint);
+  } catch (e) {
+    /* best effort */
   }
 }
 

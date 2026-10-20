@@ -118,6 +118,25 @@ Real reminders go out at the hour you picked, only on days you haven't finished 
 
 ---
 
+## Update: reminders for individual quests
+
+If you already did the setup above, do these 3 things once to get per-quest reminders:
+
+1. **Database change.** In the Supabase **SQL Editor**, run the contents of
+   `supabase/migrations/002_optional_nudge.sql` (one line).
+2. **Redeploy the sender** (it was updated), from your project folder:
+   ```
+   npx supabase functions deploy send-reminders --no-verify-jwt
+   ```
+3. **Deploy the app** (git push, see "Deploy" below).
+
+How to use it in the app:
+- The bell at the top opens **Reminders**: turn notifications on, optionally keep the "daily nudge" (a general reminder if you haven't finished any quest), and send a test.
+- Each quest has its own bell. Tap it, pick a time, tap **Set**. That quest reminds you every day at that time until you complete or abandon it.
+- Per-quest reminders need cloud saving to be working, because the server reads your quests from your cloud save.
+
+---
+
 ## Deploy
 
 ```

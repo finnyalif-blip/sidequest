@@ -1,6 +1,9 @@
-// Supabase Edge Function: sends the daily Sidequest reminder.
-// Runs every hour (see SETUP-NOTIFICATIONS.md). For each device whose chosen reminder hour
-// is "now" in its own time zone, it sends a push unless that player already finished a quest today.
+// Supabase Edge Function: sends Sidequest reminders. Runs every hour (see SETUP-NOTIFICATIONS.md).
+// For each device, in that device's own time zone:
+//   1. Per-quest reminders: any active quest whose reminderHour is "now" gets a notification
+//      (it repeats every day until the quest is completed or abandoned).
+//   2. Daily nudge: if the device's nudge hour is "now" and no quest was finished today, send a general nudge
+//      (skipped if a per-quest reminder was already sent this hour).
 import webpush from "npm:web-push@3.6.7";
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -14,6 +17,8 @@ webpush.setVapidDetails(
   Deno.env.get("VAPID_PUBLIC_KEY")!,
   Deno.env.get("VAPID_PRIVATE_KEY")!,
 );
+
+type Quest = { id?: string; title?: string; reminderHour?: number };
 
 function localParts(tz: string, now: Date) {
   try {
@@ -33,6 +38,13 @@ function localDay(tz: string, iso: string) {
   return localParts(tz, d)?.day ?? null;
 }
 
+function questBody(titles: string[]) {
+  if (titles.length === 1) return `Time for your quest: ${titles[0]}`;
+  const shown = titles.slice(0, 2).join(", ");
+  const more = titles.length > 2 ? ` +${titles.length - 2} more` : "";
+  return `${titles.length} quests are waiting: ${shown}${more}`;
+}
+
 Deno.serve(async (req) => {
   // Only allow the scheduler (which sends the service-role key) to trigger this.
   const auth = req.headers.get("Authorization") ?? "";
@@ -44,36 +56,73 @@ Deno.serve(async (req) => {
   const { data: subs, error } = await supabase.from("push_subscriptions").select("*");
   if (error) return new Response(error.message, { status: 500 });
 
+  // Load each user's save once, even if they have several devices.
+  const saves = new Map<string, Record<string, unknown>>();
+  async function getGame(userId: string) {
+    if (!saves.has(userId)) {
+      const { data } = await supabase.from("game_saves").select("data").eq("user_id", userId).maybeSingle();
+      saves.set(userId, (data?.data as Record<string, unknown>) ?? {});
+    }
+    return saves.get(userId)!;
+  }
+
   let sent = 0, skipped = 0, removed = 0;
 
-  for (const sub of subs ?? []) {
-    const lp = localParts(sub.tz, now);
-    if (!lp || lp.hour !== sub.remind_hour) { skipped++; continue; }
-
-    const { data: save } = await supabase.from("game_saves").select("data").eq("user_id", sub.user_id).maybeSingle();
-    const game = save?.data ?? {};
-    const completed: Array<{ completedAt?: string }> = Array.isArray(game.completed) ? game.completed : [];
-    const didToday = completed.some((c) => c.completedAt && localDay(sub.tz, c.completedAt) === lp.day);
-    if (didToday) { skipped++; continue; }
-
-    const streak = Number(game.streak) || 0;
-    const body = streak >= 2
-      ? `Your ${streak}-day streak is on the line. One quick quest keeps it alive.`
-      : "A quest is waiting on your board. Got a few minutes?";
-
+  async function push(sub: { endpoint: string; p256dh: string; auth: string }, payload: Record<string, string>) {
     try {
       await webpush.sendNotification(
         { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-        JSON.stringify({ title: "Sidequest", body, url: "/", tag: "sidequest-daily" }),
+        JSON.stringify({ title: "Sidequest", url: "/", ...payload }),
       );
       sent++;
+      return true;
     } catch (e) {
       const code = (e as { statusCode?: number }).statusCode;
       if (code === 404 || code === 410) {
         await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
         removed++;
       }
+      return false;
     }
+  }
+
+  for (const sub of subs ?? []) {
+    const lp = localParts(sub.tz, now);
+    if (!lp) { skipped++; continue; }
+
+    const game = await getGame(sub.user_id);
+    let didSomething = false;
+
+    // 1. Per-quest reminders
+    const active: Quest[] = [
+      ...(Array.isArray(game.quests) ? (game.quests as Quest[]) : []),
+      ...(Array.isArray(game.mainQuests) ? (game.mainQuests as Quest[]) : []),
+    ];
+    const due = active
+      .filter((q) => Number.isInteger(q.reminderHour) && q.reminderHour === lp.hour && q.title)
+      .map((q) => q.title as string);
+    if (due.length > 0) {
+      await push(sub, { body: questBody(due), tag: "sidequest-quests" });
+      didSomething = true;
+    }
+
+    // 2. Daily nudge (only if nothing else was just sent, and no quest finished today)
+    if (!didSomething && sub.remind_hour !== null && sub.remind_hour === lp.hour) {
+      const completed: Array<{ completedAt?: string | number }> = Array.isArray(game.completed)
+        ? (game.completed as Array<{ completedAt?: string | number }>)
+        : [];
+      const didToday = completed.some((c) => c.completedAt && localDay(sub.tz, new Date(c.completedAt).toISOString()) === lp.day);
+      if (!didToday) {
+        const streak = Number(game.streak) || 0;
+        const body = streak >= 2
+          ? `Your ${streak}-day streak is on the line. One quick quest keeps it alive.`
+          : "A quest is waiting on your board. Got a few minutes?";
+        await push(sub, { body, tag: "sidequest-daily" });
+        didSomething = true;
+      }
+    }
+
+    if (!didSomething) skipped++;
   }
 
   return new Response(JSON.stringify({ sent, skipped, removed }), { headers: { "Content-Type": "application/json" } });

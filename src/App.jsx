@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabaseClient.js";
 import {
-  reminderSupport, currentReminderState, enableReminders, disableReminders, updateReminderHour, sendTestNotification,
+  reminderSupport, currentReminderState, enableReminders, disableReminders, updateNudge, syncTimezone, sendTestNotification,
 } from "./notifications.js";
 import {
   Plus, Check, Flame, X, MapPin, Briefcase, HeartPulse, Palette, Home, Sparkles,
@@ -334,6 +334,13 @@ function hashStr(str) {
   return Math.abs(h);
 }
 
+function hourLabel(h) {
+  if (h === 0) return "12:00 AM";
+  if (h < 12) return `${h}:00 AM`;
+  if (h === 12) return "12:00 PM";
+  return `${h - 12}:00 PM`;
+}
+
 // ---- Local backup: progress is ALWAYS written here first, so it survives even if cloud sign-in/save fails. ----
 const LOCAL_SAVE_KEY = "sidequest:save:v1";
 function readLocalSave() {
@@ -404,9 +411,14 @@ export default function Sidequest() {
   const [accountStatus, setAccountStatus] = useState(null); // { type: "sent"|"error", message }
   const saveTimer = useRef(null);
   const latestPayload = useRef(null);
+  const loadedUserId = useRef(null);
   const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | local
-  const [reminder, setReminder] = useState({ supported: false, reason: "", permission: "default", subscribed: false, hour: 18 });
+  const [saveErrorMsg, setSaveErrorMsg] = useState("");
+  const [reminder, setReminder] = useState({ supported: false, reason: "", permission: "default", subscribed: false, hour: 18, nudgeOn: true });
   const [reminderBusy, setReminderBusy] = useState(false);
+  const [showReminderPanel, setShowReminderPanel] = useState(false);
+  const [reminderEditId, setReminderEditId] = useState(null);
+  const [reminderDraftHour, setReminderDraftHour] = useState(18);
 
   // Sign in (anonymously, silently) and load this user's cloud save.
   useEffect(() => {
@@ -441,6 +453,7 @@ export default function Sidequest() {
           user = data.user;
         }
         if (cancelled) return;
+        loadedUserId.current = user.id;
         setAuthUser(user);
 
         const { data: row, error: rowError } = await supabase.from("game_saves").select("data").eq("user_id", user.id).maybeSingle();
@@ -472,8 +485,24 @@ export default function Sidequest() {
     // If the user clicks a magic link (new device, or confirming a linked email),
     // Supabase swaps the session out from under us — reload this device's view of the save.
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session?.user && session.user.id !== authUser?.id) {
-        window.location.reload();
+      if (event === "USER_UPDATED" && session?.user) {
+        // e.g. the email link was confirmed: show the new email without reloading
+        setAuthUser(session.user);
+        return;
+      }
+      // Only reload if the signed-in account is genuinely a DIFFERENT one than this page loaded with.
+      // (Supabase also fires SIGNED_IN when the tab regains focus, which must NOT reload.)
+      if (
+        event === "SIGNED_IN" && session?.user &&
+        loadedUserId.current && session.user.id !== loadedUserId.current
+      ) {
+        let recentlyReloaded = false;
+        try {
+          const last = Number(window.sessionStorage.getItem("sq:lastReload") || 0);
+          recentlyReloaded = Date.now() - last < 30000;
+          if (!recentlyReloaded) window.sessionStorage.setItem("sq:lastReload", String(Date.now()));
+        } catch (e) { /* ignore */ }
+        if (!recentlyReloaded) window.location.reload();
       }
     });
     return () => {
@@ -503,6 +532,7 @@ export default function Sidequest() {
         user_id: authUser.id, data: payload, updated_at: new Date().toISOString(),
       });
       setSaveError(!!error);
+      setSaveErrorMsg(error ? (error.message || "unknown error") : "");
       setSaveState(error ? "local" : "saved");
     }, 600);
     return () => clearTimeout(saveTimer.current);
@@ -531,7 +561,11 @@ export default function Sidequest() {
   // Reminder (push notification) state, read once the user is known.
   useEffect(() => {
     let cancelled = false;
-    currentReminderState().then((s) => { if (!cancelled) setReminder(s); });
+    currentReminderState().then((s) => {
+      if (cancelled) return;
+      setReminder(s);
+      if (s.subscribed && authUser) syncTimezone(supabase);
+    });
     return () => { cancelled = true; };
   }, [authUser]);
 
@@ -541,20 +575,36 @@ export default function Sidequest() {
     try {
       const res = reminder.subscribed
         ? await disableReminders(supabase)
-        : await enableReminders(supabase, authUser, reminder.hour);
+        : await enableReminders(supabase, authUser, reminder.hour, reminder.nudgeOn);
       if (res.error) showToast(res.error);
       setReminder(await currentReminderState());
     } finally {
       setReminderBusy(false);
     }
   }
-  async function changeReminderHour(hour) {
-    setReminder((r) => ({ ...r, hour }));
-    if (reminder.subscribed) {
-      const res = await updateReminderHour(supabase, hour);
-      if (res.error) showToast(res.error);
-    } else {
-      try { window.localStorage.setItem("sidequest:reminderHour", String(hour)); } catch (e) { /* ignore */ }
+  async function changeNudge(hour, nudgeOn) {
+    setReminder((r) => ({ ...r, hour, nudgeOn }));
+    const res = await updateNudge(supabase, hour, nudgeOn);
+    if (res.error) showToast(res.error);
+  }
+  function openReminderEditor(q) {
+    setReminderDraftHour(Number.isInteger(q.reminderHour) ? q.reminderHour : reminder.hour);
+    setReminderEditId(q.id);
+  }
+  function setItemReminder(kind, id, hour) {
+    const setter = kind === "main" ? setMainQuests : setQuests;
+    setter((prev) => prev.map((q) => {
+      if (q.id !== id) return q;
+      const next = { ...q };
+      if (hour === null) delete next.reminderHour;
+      else next.reminderHour = hour;
+      return next;
+    }));
+    setReminderEditId(null);
+    if (hour !== null && !reminder.subscribed) {
+      setShowReminderPanel(true);
+      setShowAccountPanel(false);
+      showToast("Reminder saved. Turn on notifications here so it can reach you.");
     }
   }
   async function testReminder() {
@@ -570,17 +620,27 @@ export default function Sidequest() {
       setAccountStatus({ type: "error", message: "Can't link an email right now — there's no active save session. Try refreshing the page first." });
       return;
     }
+    const redirectTo = window.location.origin;
     const { error } = accountMode === "link"
-      ? await supabase.auth.updateUser({ email: trimmed })
-      : await supabase.auth.signInWithOtp({ email: trimmed });
+      ? await supabase.auth.updateUser({ email: trimmed }, { emailRedirectTo: redirectTo })
+      : await supabase.auth.signInWithOtp({ email: trimmed, options: { emailRedirectTo: redirectTo } });
     if (error) {
-      setAccountStatus({ type: "error", message: error.message });
+      const text = `${error.code || ""} ${error.message || ""}`.toLowerCase();
+      let message = error.message;
+      if (text.includes("not_authorized") || text.includes("not authorized")) {
+        message = "Email isn't set up for outside addresses yet, so this link can't be sent. Your progress is still saved automatically on this device.";
+      } else if (text.includes("rate limit") || text.includes("rate_limit")) {
+        message = "Too many emails were sent recently. Wait a bit and try again. Your progress is still saved on this device.";
+      } else if (text.includes("email_exists") || text.includes("already been registered") || text.includes("already registered")) {
+        message = "That email already has an account. Tap \"Already have one?\" above and sign in with it instead.";
+      }
+      setAccountStatus({ type: "error", message });
     } else {
       setAccountStatus({
         type: "sent",
         message: accountMode === "link"
-          ? "Check your email and click the link to finish saving your account."
-          : "Check your email and click the link to sign in on this device.",
+          ? "Check your email (and spam) and click the link to finish saving your account."
+          : "Check your email (and spam) and click the link to sign in on this device.",
       });
     }
   }
@@ -866,6 +926,22 @@ export default function Sidequest() {
         .sq-account-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
         .sq-account-tab { font-size: 12px; font-weight: 600; padding: 6px 10px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink-soft); cursor: pointer; }
         .sq-account-tab.active { border-color: var(--ink); background: #fff; color: var(--ink); }
+        .sq-bell-btn { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--paper); color: var(--ink-soft); border: 1.5px solid var(--line); cursor: pointer; }
+        .sq-bell-btn:hover { border-color: var(--ink); color: var(--ink); }
+        .sq-bell-btn.on { color: var(--gold); border-color: var(--gold); }
+        .sq-bell-btn:focus-visible { outline: 2px solid var(--trail); outline-offset: 2px; }
+        .sq-nudge-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); cursor: pointer; }
+        .sq-nudge-row input { width: 16px; height: 16px; accent-color: var(--trail); }
+        .sq-icon-btn.bell { border-color: var(--line); color: var(--ink-soft); }
+        .sq-icon-btn.bell:hover { border-color: var(--gold); color: var(--gold); }
+        .sq-icon-btn.bell.set, .sq-main-icon-btn.bell.set { color: var(--gold); border-color: var(--gold); }
+        .sq-main-icon-btn.bell:hover { border-color: var(--gold); color: var(--gold); }
+        .sq-remind-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; color: var(--gold); font-weight: 600; }
+        .sq-quest, .sq-main-quest { flex-wrap: wrap; }
+        .sq-qreminder { box-sizing: border-box; flex: 0 0 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px 10px; border-top: 1px dashed var(--line); font-size: 12.5px; color: var(--ink-soft); }
+        .sq-qreminder.dark { color: #C9BFA6; border-top-color: rgba(237,227,208,0.3); }
+        .sq-qreminder .sq-input { width: auto; min-width: 110px; padding: 6px 8px; }
+        .sq-qreminder .sq-add-btn { padding: 6px 12px; }
         .sq-reminder-block { margin-top: 14px; padding-top: 12px; border-top: 1.5px dashed var(--line); }
         .sq-reminder-title { display: flex; align-items: center; gap: 6px; font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
         .sq-account-text { font-size: 12.5px; color: var(--ink-soft); margin: 0 0 10px; line-height: 1.5; }
@@ -1034,9 +1110,17 @@ export default function Sidequest() {
             <button
               type="button"
               className="sq-account-btn"
-              onClick={() => { setShowAccountPanel((v) => !v); setAccountStatus(null); }}
+              onClick={() => { setShowAccountPanel((v) => !v); setShowReminderPanel(false); setAccountStatus(null); }}
             >
-              {authUser?.email ? `\u2713 ${authUser.email}` : authInitError ? "\u26a0 Device only" : "Save progress"}
+              {authUser?.email ? `\u2713 ${authUser.email}` : authInitError ? "\u26a0 Device only" : saveState === "saving" ? "Saving\u2026" : saveState === "saved" ? "\u2713 Saved" : saveState === "local" ? "\u26a0 Device only" : "Save progress"}
+            </button>
+            <button
+              type="button"
+              className={`sq-bell-btn ${reminder.subscribed ? "on" : ""}`}
+              onClick={() => { setShowReminderPanel((v) => !v); setShowAccountPanel(false); }}
+              aria-label="Reminders"
+            >
+              <Bell size={18} strokeWidth={1.9} />
             </button>
             <button type="button" className="sq-die-btn" onClick={rollForQuest} aria-label="Roll the die for a random quest">
               <Dice5 size={26} strokeWidth={1.75} />
@@ -1046,6 +1130,9 @@ export default function Sidequest() {
 
         {showAccountPanel && (
           <div className="sq-account-panel">
+            {saveErrorMsg && !authInitError && (
+              <p className="sq-account-status error">Cloud save problem: {saveErrorMsg}. Your progress is still saved on this device.</p>
+            )}
             {authInitError ? (
               <>
                 <p className="sq-account-text">{authInitError}</p>
@@ -1064,7 +1151,7 @@ export default function Sidequest() {
                 </div>
                 <p className="sq-account-text">
                   {accountMode === "link"
-                    ? "Your progress is already saving automatically on this device. Add an email if you'd like to pick it up on another device too \u2014 nothing else changes."
+                    ? "You don't need an email to save \u2014 progress saves automatically. Add one only if you want to open your game on another phone or computer."
                     : "Signing in will replace what's on this device with whatever's saved to that account."}
                 </p>
                 <div className="sq-account-form">
@@ -1079,47 +1166,65 @@ export default function Sidequest() {
                 )}
               </>
             )}
+          </div>
+        )}
 
-            <div className="sq-reminder-block">
-              <div className="sq-reminder-title"><Bell size={14} /> Daily reminder</div>
-              {!reminder.supported ? (
-                <p className="sq-account-text">{reminder.reason || "Notifications aren't available in this browser."}</p>
-              ) : !authUser ? (
-                <p className="sq-account-text">Reminders need cloud saving switched on first, so they can reach you when the app is closed.</p>
-              ) : (
-                <>
-                  <p className="sq-account-text">
-                    {reminder.subscribed
-                      ? "You'll get a nudge once a day if you haven't finished a quest yet."
-                      : "Get a nudge once a day if you haven't finished a quest, so your streak survives."}
-                  </p>
-                  <div className="sq-account-form">
-                    <select
-                      className="sq-input" value={reminder.hour}
-                      onChange={(e) => changeReminderHour(Number(e.target.value))}
-                      aria-label="Reminder time"
-                    >
-                      {Array.from({ length: 24 }, (_, h) => (
-                        <option key={h} value={h}>
-                          {h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="button" className="sq-add-btn" onClick={toggleReminders} disabled={reminderBusy}>
-                      {reminder.subscribed ? "Turn off" : "Turn on"}
-                    </button>
-                  </div>
+        {showReminderPanel && (
+          <div className="sq-account-panel">
+            <div className="sq-reminder-title"><Bell size={14} /> Reminders</div>
+            {!reminder.supported ? (
+              <p className="sq-account-text">{reminder.reason || "Notifications aren't available in this browser."}</p>
+            ) : !authUser ? (
+              <p className="sq-account-text">Reminders need cloud saving switched on first, so they can reach you when the app is closed.</p>
+            ) : (
+              <>
+                <p className="sq-account-text">
+                  {reminder.subscribed
+                    ? "Notifications are on for this device."
+                    : "Turn on notifications to get reminders even when the app is closed."}
+                </p>
+                <div className="sq-account-form">
+                  <button type="button" className="sq-add-btn" onClick={toggleReminders} disabled={reminderBusy}>
+                    {reminder.subscribed ? "Turn off notifications" : "Turn on notifications"}
+                  </button>
                   {reminder.subscribed && (
-                    <button type="button" className="sq-account-signout" style={{ marginTop: 10, color: "var(--ink-soft)", borderColor: "var(--line)" }} onClick={testReminder}>
-                      Send a test notification
+                    <button type="button" className="sq-account-signout" style={{ color: "var(--ink-soft)", borderColor: "var(--line)" }} onClick={testReminder}>
+                      Send a test
                     </button>
                   )}
-                  {reminder.permission === "denied" && (
-                    <p className="sq-account-status error">Notifications are blocked for this site. Allow them in your browser or phone settings, then try again.</p>
+                </div>
+                {reminder.permission === "denied" && (
+                  <p className="sq-account-status error">Notifications are blocked for this site. Allow them in your browser or phone settings, then try again.</p>
+                )}
+
+                <div className="sq-reminder-block">
+                  <label className="sq-nudge-row">
+                    <input
+                      type="checkbox" checked={reminder.nudgeOn}
+                      onChange={(e) => changeNudge(reminder.hour, e.target.checked)}
+                    />
+                    <span>Daily nudge if I haven't finished any quest</span>
+                  </label>
+                  {reminder.nudgeOn && (
+                    <div className="sq-account-form" style={{ marginTop: 8 }}>
+                      <select
+                        className="sq-input" value={reminder.hour}
+                        onChange={(e) => changeNudge(Number(e.target.value), true)}
+                        aria-label="Daily nudge time"
+                      >
+                        {Array.from({ length: 24 }, (_, h) => (
+                          <option key={h} value={h}>{hourLabel(h)}</option>
+                        ))}
+                      </select>
+                    </div>
                   )}
-                </>
-              )}
-            </div>
+                </div>
+
+                <p className="sq-account-text" style={{ marginTop: 12, marginBottom: 0 }}>
+                  Want a reminder for one specific quest? Tap the bell on that quest and pick a time. It reminds you every day until you finish it.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -1298,13 +1403,24 @@ export default function Sidequest() {
                     <div className="sq-main-body">
                       <div className="sq-quest-main">
                         <div className="sq-main-title">{q.title}</div>
-                        <div className="sq-main-meta"><Crown size={12} />{tier?.label} · {q.xp}xp</div>
+                        <div className="sq-main-meta"><Crown size={12} />{tier?.label} · {q.xp}xp{Number.isInteger(q.reminderHour) && (<span className="sq-remind-tag"><Bell size={11} />{hourLabel(q.reminderHour)}</span>)}</div>
                       </div>
                       <div className="sq-quest-actions">
+                        <button className={`sq-main-icon-btn bell ${Number.isInteger(q.reminderHour) ? "set" : ""}`} onClick={() => (reminderEditId === q.id ? setReminderEditId(null) : openReminderEditor(q))} aria-label={`Set a reminder for ${q.title}`}><Bell size={15} strokeWidth={2} /></button>
                         <button className="sq-main-icon-btn complete" onClick={() => completeMainQuest(q.id)} aria-label={`Complete ${q.title}`}><Check size={16} strokeWidth={2.5} /></button>
                         <button className="sq-main-icon-btn abandon" onClick={() => abandonMainQuest(q.id)} aria-label={`Abandon ${q.title}`}><X size={15} strokeWidth={2.5} /></button>
                       </div>
                     </div>
+                    {reminderEditId === q.id && (
+                      <div className="sq-qreminder dark">
+                        <span>Remind me every day at</span>
+                        <select className="sq-input" value={reminderDraftHour} onChange={(e) => setReminderDraftHour(Number(e.target.value))} aria-label="Reminder time">
+                          {Array.from({ length: 24 }, (_, h) => (<option key={h} value={h}>{hourLabel(h)}</option>))}
+                        </select>
+                        <button type="button" className="sq-add-btn" onClick={() => setItemReminder("main", q.id, reminderDraftHour)}>Set</button>
+                        {Number.isInteger(q.reminderHour) && (<button type="button" className="sq-account-signout" onClick={() => setItemReminder("main", q.id, null)}>Remove</button>)}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -1377,13 +1493,24 @@ export default function Sidequest() {
                     <div className="sq-quest-body">
                       <div className="sq-quest-main">
                         <div className="sq-quest-title">{q.title}</div>
-                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} · {diff.label} · {q.xp}xp</div>
+                        <div className="sq-quest-meta"><cat.Icon size={13} style={{ color: cat.color }} />{cat.label} · {diff.label} · {q.xp}xp{Number.isInteger(q.reminderHour) && (<span className="sq-remind-tag"><Bell size={11} />{hourLabel(q.reminderHour)}</span>)}</div>
                       </div>
                       <div className="sq-quest-actions">
+                        <button className={`sq-icon-btn bell ${Number.isInteger(q.reminderHour) ? "set" : ""}`} onClick={() => (reminderEditId === q.id ? setReminderEditId(null) : openReminderEditor(q))} aria-label={`Set a reminder for ${q.title}`}><Bell size={15} strokeWidth={2} /></button>
                         <button className="sq-icon-btn complete" onClick={() => completeQuest(q.id)} aria-label={`Complete ${q.title}`}><Check size={16} strokeWidth={2.5} /></button>
                         <button className="sq-icon-btn abandon" onClick={() => abandonQuest(q.id)} aria-label={`Abandon ${q.title}`}><X size={15} strokeWidth={2.5} /></button>
                       </div>
                     </div>
+                    {reminderEditId === q.id && (
+                      <div className="sq-qreminder">
+                        <span>Remind me every day at</span>
+                        <select className="sq-input" value={reminderDraftHour} onChange={(e) => setReminderDraftHour(Number(e.target.value))} aria-label="Reminder time">
+                          {Array.from({ length: 24 }, (_, h) => (<option key={h} value={h}>{hourLabel(h)}</option>))}
+                        </select>
+                        <button type="button" className="sq-add-btn" onClick={() => setItemReminder("side", q.id, reminderDraftHour)}>Set</button>
+                        {Number.isInteger(q.reminderHour) && (<button type="button" className="sq-account-signout" onClick={() => setItemReminder("side", q.id, null)}>Remove</button>)}
+                      </div>
+                    )}
                   </div>
                 );
               })
