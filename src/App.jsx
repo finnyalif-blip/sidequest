@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "./supabaseClient.js";
 import {
   reminderSupport, currentReminderState, enableReminders, disableReminders, updateNudge, syncTimezone, sendTestNotification,
@@ -367,6 +367,46 @@ function titleForLevel(level) {
   }
   return t;
 }
+// ---- Personality: greetings, pet chatter, and story beats ----
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+function greetingFor({ name, streak, doneToday, lastCompletionDate }) {
+  const h = new Date().getHours();
+  const hi = name ? `, ${name}` : "";
+  const part = h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 22 ? "Good evening" : "Up late";
+  if (doneToday >= 5) return `${part}${hi}. ${doneToday} quests today — you're on a tear.`;
+  if (doneToday > 0) return `${part}${hi}. ${doneToday} down today. Keep the momentum.`;
+  if (streak >= 7) return `${part}${hi}. Day ${streak} of your streak — let's not break it now.`;
+  if (streak > 0) return `${part}${hi}. One quest keeps your ${streak}-day streak alive.`;
+  if (lastCompletionDate) return `${part}${hi}. Welcome back — the board's right where you left it.`;
+  return `${part}${hi}. Pick one small quest and let's begin.`;
+}
+
+const PET_IDLE_LINES = {
+  morning: ["Fresh day, fresh quests.", "I'm ready when you are.", "Let's start small."],
+  day: ["What are we tackling next?", "I believe in us.", "One more and I'll do a little dance."],
+  night: ["Quiet hours are good for quick wins.", "Even one quest counts.", "Rest is part of the journey too."],
+  streak: ["Don't let the streak go cold!", "Our streak is looking good.", "Keep that fire going."],
+  away: ["You're back! I missed you.", "I saved your spot on the board.", "Ready for an adventure?"],
+};
+const PET_CHEER_LINES = [
+  "Nice! That one's done.", "Yes! Onward!", "Look at you go!", "Another one off the list.",
+  "That's how it's done.", "We're getting stronger.", "Quest complete. High five!",
+];
+function petIdleLine({ streak, doneToday, lastCompletionDate }) {
+  const h = new Date().getHours();
+  if (lastCompletionDate && !isYesterday(lastCompletionDate) && lastCompletionDate !== todayStr()) return pick(PET_IDLE_LINES.away);
+  if (streak >= 3 && doneToday === 0) return pick(PET_IDLE_LINES.streak);
+  return pick(h < 12 ? PET_IDLE_LINES.morning : h < 20 ? PET_IDLE_LINES.day : PET_IDLE_LINES.night);
+}
+
+const STAGE_STORY = {
+  Meadow: "🌿 The meadow path begins. Every journey starts with a first step.",
+  Forest: "🌲 You've entered the Forest. The trail grows quieter, and you grow steadier.",
+  Mountains: "⛰️ The Mountains rise ahead. The climb is steep, but look how far you've come.",
+  Castle: "🏰 The Castle gates are in sight. The final stretch of this lap.",
+};
+
 function stageForSpace(n) {
   return STAGES.find((s) => n >= s.from && n <= s.to) || STAGES[0];
 }
@@ -608,6 +648,9 @@ export default function Sidequest() {
   const [ideaFilter, setIdeaFilter] = useState("all");
 
   const [toast, setToast] = useState(null);
+  const [petSay, setPetSay] = useState(null); // a reaction line shown briefly after finishing a quest
+  const petSayTimer = useRef(null);
+  const [hopKey, setHopKey] = useState(0); // bumps to replay the avatar hop
   const toastTimer = useRef(null);
 
   const [authUser, setAuthUser] = useState(null);
@@ -961,6 +1004,11 @@ export default function Sidequest() {
       const prevLap = Math.floor((prevLevelRef.current - 1) / BOARD_LENGTH) + 1;
       const newLap = Math.floor((level - 1) / BOARD_LENGTH) + 1;
       if (newLap > prevLap) msgs.push("Lap complete! The board loops back \u2014 onward.");
+      else if (level > prevLevelRef.current) {
+        const prevStage = stageForSpace(((prevLevelRef.current - 1) % BOARD_LENGTH) + 1);
+        const newStage = stageForSpace(((level - 1) % BOARD_LENGTH) + 1);
+        if (newStage.name !== prevStage.name && STAGE_STORY[newStage.name]) msgs.push(STAGE_STORY[newStage.name]);
+      }
       if (freshGear.length > 0) msgs.push(`Unlocked ${freshGear.length} new item${freshGear.length === 1 ? "" : "s"}`);
       if (freshPets.length > 0) msgs.push(`New companion: ${freshPets.map((p) => `${p.emoji || "\u2728"} ${p.name}`).join(", ")}`);
       if (msgs.length > 0) showToast(msgs.join(" · "));
@@ -1109,6 +1157,13 @@ export default function Sidequest() {
       });
     }
 
+    setHopKey((k) => k + 1);
+    if (activePet) {
+      setPetSay(pick(PET_CHEER_LINES));
+      clearTimeout(petSayTimer.current);
+      petSayTimer.current = setTimeout(() => setPetSay(null), 5000);
+    }
+
     if (petMsg) {
       showToast(petMsg);
     } else {
@@ -1234,6 +1289,9 @@ export default function Sidequest() {
   }
 
   const todaysCompleted = completed.filter((c) => new Date(c.completedAt).toDateString() === new Date().toDateString());
+  const greeting = greetingFor({ name: playerName, streak, doneToday: todaysCompleted.length, lastCompletionDate });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const idlePetLine = useMemo(() => petIdleLine({ streak, doneToday: todaysCompleted.length, lastCompletionDate }), [activePet, streak, todaysCompleted.length, lastCompletionDate]);
   const typeLabel = { main: "Main", bonus: "Bonus" };
 
   const boardPos = ((level - 1) % BOARD_LENGTH) + 1;
@@ -1241,10 +1299,10 @@ export default function Sidequest() {
   const boardRow = Math.floor((boardPos - 1) / BOARD_COLS);
   const boardCol = (boardPos - 1) % BOARD_COLS;
 
-  function Avatar({ scale }) {
+  function Avatar({ scale, alive = false }) {
     const layers = avatarLayers();
     return (
-      <div style={{ position: "relative", width: GEAR_FRAME * scale, height: GEAR_FRAME * scale, flexShrink: 0 }}>
+      <div key={alive ? hopKey : undefined} className={alive ? `sq-avatar-alive ${hopKey > 0 ? "hop" : ""}` : undefined} style={{ position: "relative", width: GEAR_FRAME * scale, height: GEAR_FRAME * scale, flexShrink: 0 }}>
         {layers.map((id) => <div key={id} style={{ position: "absolute", inset: 0, ...gearStyle(id, scale) }} />)}
       </div>
     );
@@ -1335,6 +1393,20 @@ export default function Sidequest() {
         .sq-xp-label { margin-top: 4px; font-size: 12px; color: var(--ink-soft); }
 
         .sq-character-row { display: flex; gap: 16px; align-items: flex-end; margin-top: 14px; flex-wrap: wrap; }
+        .sq-greeting { margin: 0 0 8px; font-size: 14px; color: var(--ink-soft); font-style: italic; }
+        .sq-avatar-alive { animation: sq-breathe 3.2s ease-in-out infinite; transform-origin: 50% 100%; }
+        .sq-avatar-alive.hop { animation: sq-hop 0.5s ease-out, sq-breathe 3.2s ease-in-out 0.5s infinite; }
+        @keyframes sq-breathe { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(1.02); } }
+        @keyframes sq-hop { 0% { transform: translateY(0); } 35% { transform: translateY(-14px); } 60% { transform: translateY(0) scaleY(0.96); } 100% { transform: none; } }
+        .sq-pet-badge { position: relative; }
+        .sq-pet-say { max-width: 150px; font-size: 11px; line-height: 1.3; background: #fff; border: 1.5px solid var(--ink); padding: 5px 7px; margin-bottom: 6px; position: relative; text-align: center; }
+        .sq-pet-say::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 8px; height: 8px; background: #fff; border-right: 1.5px solid var(--ink); border-bottom: 1.5px solid var(--ink); transform: translateX(-50%) rotate(45deg); }
+        .sq-pet-say.cheer { border-color: var(--gold); font-weight: 600; animation: sq-pop 0.3s ease-out; }
+        .sq-modal.celebrate { position: relative; }
+        .sq-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+        .sq-confetti span { position: absolute; top: -10px; width: 7px; height: 11px; animation: sq-confetti-fall 1.6s ease-in forwards; }
+        @keyframes sq-confetti-fall { 0% { transform: translateY(0) rotate(0); opacity: 1; } 100% { transform: translateY(420px) rotate(540deg); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .sq-avatar-alive, .sq-avatar-alive.hop, .sq-pet-say.cheer { animation: none; } .sq-confetti { display: none; } }
         .sq-pet-badge { display: flex; flex-direction: column; align-items: center; gap: 2px; }
         .sq-pet-emoji { line-height: 1; filter: drop-shadow(0 2px 2px rgba(0,0,0,0.25)); }
         .sq-pet-level { font-size: 10px; font-weight: 700; color: var(--trail); background: #fff; border: 1px solid var(--ink); padding: 0 4px; }
@@ -1742,6 +1814,7 @@ export default function Sidequest() {
         ) : (
           <>
             <div className="sq-status">
+              <p className="sq-greeting">{greeting}</p>
               <div className="sq-status-row">
                 <div><span className="sq-level-num">Lv.{level}</span> <span className="sq-level-name">{titleForLevel(level)}</span></div>
                 {streak > 0 && (<div className="sq-streak"><Flame size={15} strokeWidth={2.5} />{streak}-day streak</div>)}
@@ -1752,9 +1825,10 @@ export default function Sidequest() {
               </button>
 
               <div className="sq-character-row">
-                <Avatar scale={3} />
+                <Avatar scale={3} alive />
                 {equippedPetSpecies && (
                   <div className="sq-pet-badge">
+                    <div className={`sq-pet-say ${petSay ? "cheer" : ""}`} aria-live="polite">{petSay || idlePetLine}</div>
                     {equippedPetSpecies.image ? (
                       <img src={equippedPetSpecies.image} alt={equippedPetSpecies.name} className="sq-pet-emoji" style={{ width: 48 * activePetStage.scale, height: 48 * activePetStage.scale, objectFit: "contain" }} />
                     ) : (
@@ -2021,6 +2095,13 @@ export default function Sidequest() {
       {shareCard && (
         <div className="sq-modal-backdrop" onClick={() => setShareCard(null)}>
           <div className={`sq-modal ${shareCard.celebrate ? "celebrate" : ""}`} role="dialog" aria-modal="true" aria-label={`Level ${shareCard.level}`} onClick={(e) => e.stopPropagation()}>
+            {shareCard.celebrate && (
+              <div className="sq-confetti" aria-hidden="true">
+                {Array.from({ length: 18 }, (_, i) => (
+                  <span key={i} style={{ left: `${(i * 53) % 100}%`, animationDelay: `${(i % 6) * 0.07}s`, background: ["#C99A2E", "#8FAE6B", "#C2553C", "#3F6C51", "#6B8FC9"][i % 5] }} />
+                ))}
+              </div>
+            )}
             {shareCard.celebrate && <div className="sq-modal-kicker">{"\ud83c\udf89"} Level up!</div>}
             <div className="sq-modal-title">{shareCard.celebrate ? `You reached Level ${shareCard.level}` : `You're Level ${shareCard.level}`}</div>
             <div className="sq-modal-sub">{shareCard.title}{shareCard.celebrate ? " \u2014 show your friends." : ""}</div>
