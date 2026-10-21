@@ -158,9 +158,9 @@ const GEAR_MANIFEST = [
   { id: "hair_wavyfringe_blonde", category: "hair", unlockAt: null, col: 7, row: 2 },
   { id: "hair_wavyfringe_brown", category: "hair", unlockAt: null, col: 8, row: 2 },
   { id: "hair_wavyfringe_black", category: "hair", unlockAt: null, col: 9, row: 2 },
-  { id: "hair_sidefringe_tan", category: "shirt", unlockAt: null, col: 0, row: 3 },
-  { id: "hair_sidefringe_red", category: "shirt", unlockAt: null, col: 1, row: 3 },
-  { id: "hair_sidefringe_orange", category: "shirt", unlockAt: null, col: 2, row: 3 },
+  { id: "hair_sidefringe_tan", category: "shirt", unlockAt: 2, col: 0, row: 3 },
+  { id: "hair_sidefringe_red", category: "shirt", unlockAt: 3, col: 1, row: 3 },
+  { id: "hair_sidefringe_orange", category: "shirt", unlockAt: 4, col: 2, row: 3 },
   { id: "shirt_light", category: "shirt", unlockAt: 1, col: 3, row: 3 },
   { id: "shirt_dark", category: "shirt", unlockAt: 1, col: 4, row: 3 },
   { id: "shirt_leather", category: "shirt", unlockAt: null, col: 5, row: 3 },
@@ -193,10 +193,10 @@ const GEAR_MANIFEST = [
   { id: "shield_round", category: "shield", unlockAt: null, col: 2, row: 6 },
   { id: "shield_cross", category: "shield", unlockAt: 5, col: 3, row: 6 },
   { id: "shield_kite", category: "shield", unlockAt: 9, col: 4, row: 6 },
-  { id: "pants_legion_brown", category: "pants", unlockAt: null, col: 5, row: 6 },
+  { id: "pants_legion_brown", category: "pants", unlockAt: 2, col: 5, row: 6 },
   { id: "pants_legion_black", category: "pants", unlockAt: 5, col: 6, row: 6 },
   { id: "pants_legion_red", category: "pants", unlockAt: 7, col: 7, row: 6 },
-  { id: "pants_slit_blue", category: "pants", unlockAt: null, col: 8, row: 6 },
+  { id: "pants_slit_blue", category: "pants", unlockAt: 3, col: 8, row: 6 },
   { id: "pants_slit_black", category: "pants", unlockAt: 5, col: 9, row: 6 },
   { id: "pants_slit_tan", category: "pants", unlockAt: 7, col: 0, row: 7 },
   { id: "hair_shoulder_blonde", category: "hair", unlockAt: null, col: 1, row: 7 },
@@ -232,35 +232,35 @@ const GEAR_MANIFEST = [
   { id: "hair_braidbun_blonde", category: "hair", unlockAt: null, col: 1, row: 10 },
   { id: "hair_braidbun_pink", category: "hair", unlockAt: null, col: 2, row: 10 },
   { id: "hair_braidbun_purple", category: "hair", unlockAt: null, col: 3, row: 10 },
-  { id: "shirt_dress_red", category: "shirt", unlockAt: null, col: 4, row: 10 },
-  { id: "shirt_dress_yellow", category: "shirt", unlockAt: null, col: 5, row: 10 },
-  { id: "shirt_dress_teal", category: "shirt", unlockAt: null, col: 6, row: 10 },
-  { id: "shirt_dress_sky", category: "shirt", unlockAt: null, col: 7, row: 10 },
-  { id: "shirt_dress_blue", category: "shirt", unlockAt: null, col: 8, row: 10 },
-  { id: "shirt_dress_navy", category: "shirt", unlockAt: null, col: 9, row: 10 },
-  { id: "shirt_dress_lavender", category: "shirt", unlockAt: null, col: 0, row: 11 },
-  { id: "shirt_dress_purple", category: "shirt", unlockAt: null, col: 1, row: 11 },
-  { id: "pants_slit_red", category: "pants", unlockAt: null, col: 2, row: 11 },
-  { id: "pants_slit_teal", category: "pants", unlockAt: null, col: 3, row: 11 },
-  { id: "pants_legion_teal", category: "pants", unlockAt: null, col: 4, row: 11 },
-  { id: "pants_legion_crimson", category: "pants", unlockAt: null, col: 5, row: 11 },
-  { id: "pants_legion_purple", category: "pants", unlockAt: null, col: 6, row: 11 },
-  { id: "shirt_bodice_red", category: "shirt", unlockAt: null, col: 7, row: 11 },
-  { id: "shirt_bodice_teal", category: "shirt", unlockAt: null, col: 8, row: 11 },
-  { id: "shirt_bodice_blue", category: "shirt", unlockAt: null, col: 9, row: 11 },
-  { id: "shirt_bodice_lavender", category: "shirt", unlockAt: null, col: 0, row: 12 },
-  { id: "shirt_bodice_purple", category: "shirt", unlockAt: null, col: 1, row: 12 },
-  { id: "shirt_kimono_red", category: "shirt", unlockAt: null, col: 2, row: 12 },
-  { id: "shirt_kimono_teal", category: "shirt", unlockAt: null, col: 3, row: 12 },
-  { id: "shirt_kimono_blue", category: "shirt", unlockAt: null, col: 4, row: 12 },
-  { id: "shirt_kimono_lavender", category: "shirt", unlockAt: null, col: 5, row: 12 },
-  { id: "shirt_blouse_teal", category: "shirt", unlockAt: null, col: 6, row: 12 },
-  { id: "shirt_polo_black", category: "shirt", unlockAt: null, col: 7, row: 12 },
-  { id: "shirt_polo_brown", category: "shirt", unlockAt: null, col: 8, row: 12 },
-  { id: "shirt_polo_cream", category: "shirt", unlockAt: null, col: 9, row: 12 },
-  { id: "shirt_blouse_purple", category: "shirt", unlockAt: null, col: 0, row: 13 },
-  { id: "shirt_blouse_lavender", category: "shirt", unlockAt: null, col: 1, row: 13 },
-  { id: "shirt_polo_leather", category: "shirt", unlockAt: null, col: 2, row: 13 },
+  { id: "shirt_dress_red", category: "shirt", unlockAt: 6, col: 4, row: 10 },
+  { id: "shirt_dress_yellow", category: "shirt", unlockAt: 7, col: 5, row: 10 },
+  { id: "shirt_dress_teal", category: "shirt", unlockAt: 8, col: 6, row: 10 },
+  { id: "shirt_dress_sky", category: "shirt", unlockAt: 9, col: 7, row: 10 },
+  { id: "shirt_dress_blue", category: "shirt", unlockAt: 10, col: 8, row: 10 },
+  { id: "shirt_dress_navy", category: "shirt", unlockAt: 11, col: 9, row: 10 },
+  { id: "shirt_dress_lavender", category: "shirt", unlockAt: 12, col: 0, row: 11 },
+  { id: "shirt_dress_purple", category: "shirt", unlockAt: 13, col: 1, row: 11 },
+  { id: "pants_slit_red", category: "pants", unlockAt: 4, col: 2, row: 11 },
+  { id: "pants_slit_teal", category: "pants", unlockAt: 6, col: 3, row: 11 },
+  { id: "pants_legion_teal", category: "pants", unlockAt: 9, col: 4, row: 11 },
+  { id: "pants_legion_crimson", category: "pants", unlockAt: 11, col: 5, row: 11 },
+  { id: "pants_legion_purple", category: "pants", unlockAt: 13, col: 6, row: 11 },
+  { id: "shirt_bodice_red", category: "shirt", unlockAt: 4, col: 7, row: 11 },
+  { id: "shirt_bodice_teal", category: "shirt", unlockAt: 5, col: 8, row: 11 },
+  { id: "shirt_bodice_blue", category: "shirt", unlockAt: 6, col: 9, row: 11 },
+  { id: "shirt_bodice_lavender", category: "shirt", unlockAt: 8, col: 0, row: 12 },
+  { id: "shirt_bodice_purple", category: "shirt", unlockAt: 9, col: 1, row: 12 },
+  { id: "shirt_kimono_red", category: "shirt", unlockAt: 10, col: 2, row: 12 },
+  { id: "shirt_kimono_teal", category: "shirt", unlockAt: 12, col: 3, row: 12 },
+  { id: "shirt_kimono_blue", category: "shirt", unlockAt: 15, col: 4, row: 12 },
+  { id: "shirt_kimono_lavender", category: "shirt", unlockAt: 18, col: 5, row: 12 },
+  { id: "shirt_blouse_teal", category: "shirt", unlockAt: 5, col: 6, row: 12 },
+  { id: "shirt_polo_black", category: "shirt", unlockAt: 4, col: 7, row: 12 },
+  { id: "shirt_polo_brown", category: "shirt", unlockAt: 3, col: 8, row: 12 },
+  { id: "shirt_polo_cream", category: "shirt", unlockAt: 2, col: 9, row: 12 },
+  { id: "shirt_blouse_purple", category: "shirt", unlockAt: 6, col: 0, row: 13 },
+  { id: "shirt_blouse_lavender", category: "shirt", unlockAt: 7, col: 1, row: 13 },
+  { id: "shirt_polo_leather", category: "shirt", unlockAt: 6, col: 2, row: 13 },
   { id: "shirt_polo_plate", category: "shirt", unlockAt: 14, col: 3, row: 13 },
   { id: "shirt_polo_plate_dark", category: "shirt", unlockAt: 14, col: 4, row: 13 },
 ];
@@ -658,7 +658,12 @@ export default function Sidequest() {
       setDailyBonus(gameData.dailyBonus || null);
       setCharacter({ ...DEFAULT_CHARACTER, ...(gameData.character || {}) });
       setEquipment({ ...DEFAULT_EQUIPMENT, ...(gameData.equipment || {}) });
-      setUnlockedGear(gameData.unlockedGear || []);
+      {
+        // Items that became level-locked later stay unlocked for anyone already wearing them.
+        const worn = [...Object.values(gameData.character || {}), ...Object.values(gameData.equipment || {})]
+          .filter((id) => GEAR_BY_ID[id] && GEAR_BY_ID[id].unlockAt);
+        setUnlockedGear([...new Set([...(gameData.unlockedGear || []), ...worn])]);
+      }
       setPets(gameData.pets || {});
       setActivePet(gameData.activePet || null);
       setFriendSends(gameData.friendSends || { date: null, count: 0 });
@@ -1802,6 +1807,7 @@ export default function Sidequest() {
                               onClick={() => !locked && selectGear(gearTab, g.id)}
                               disabled={locked}
                               aria-label={locked ? `Locked until level ${g.unlockAt}` : g.id}
+                              title={locked ? `Unlocks at level ${g.unlockAt}` : undefined}
                             >
                               {locked && <Lock size={13} />}
                             </button>
